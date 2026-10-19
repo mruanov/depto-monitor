@@ -23,7 +23,12 @@ from config import (
     TELEGRAM_CHAT_ID,
 )
 from database import init_db, es_nueva, guardar_publicacion, marcar_notificado, registrar_ejecucion
-from scraper import scrapear_todas_las_comunas, enriquecer_con_gc
+from scraper import (
+    ScrapeAccessError,
+    ScrapeUnavailableError,
+    scrapear_todas_las_comunas,
+    enriquecer_con_gc,
+)
 from filtro import aplicar_filtros_y_scoring
 from uf_helper import obtener_valor_uf
 from notificador import (
@@ -58,7 +63,7 @@ logger = logging.getLogger(__name__)
 # CICLO PRINCIPAL
 # ─────────────────────────────────────────────────────────
 
-def ejecutar_ciclo(dry_run: bool = False) -> None:
+def ejecutar_ciclo(dry_run: bool = False) -> bool:
     inicio = datetime.now().isoformat()
     logger.info("=" * 60)
     logger.info("INICIO DE CICLO — %s%s", inicio, " [DRY RUN]" if dry_run else "")
@@ -67,6 +72,7 @@ def ejecutar_ciclo(dry_run: bool = False) -> None:
     total_analizadas = 0
     total_nuevas = 0
     status = "OK"
+    ciclo_ok = True
 
     try:
         # ── 1. SCRAPING ──────────────────────────────────
@@ -78,7 +84,7 @@ def ejecutar_ciclo(dry_run: bool = False) -> None:
         if not publicaciones_crudas:
             logger.warning("No se obtuvieron publicaciones. Verifique la conectividad.")
             status = "WARN_EMPTY"
-            return
+            return True
 
         # ── 2. PRE-FILTRADO RÁPIDO Y ENRIQUECIMIENTO ───────
         logger.info("PASO 2: Aplicando Fast-Pass por precio base antes de enriquecer...")
@@ -106,31 +112,45 @@ def ejecutar_ciclo(dry_run: bool = False) -> None:
             f"{MAX_PRECIO_TOTAL_CLP:,}",
         )
 
-        logger.info("Enriqueciendo con detalles únicamente las publicaciones candidateables...")
+        logger.info("PASO 3: Deduplicando antes de consultar detalles...")
+        publicaciones_pendientes = []
+        procesados_en_ciclo = set()
+        for pub in publicaciones_candidateables:
+            pub_id = pub["id"]
+            if pub_id in procesados_en_ciclo:
+                logger.debug("Omitiendo aviso duplicado o ya notificado: %s", pub_id)
+                continue
+            procesados_en_ciclo.add(pub_id)
+            if not es_nueva(pub_id):
+                logger.debug("Omitiendo aviso duplicado o ya notificado: %s", pub_id)
+                continue
+            publicaciones_pendientes.append(pub)
+
+        logger.info(
+            "Pendientes de procesamiento: %d de %d candidateables.",
+            len(publicaciones_pendientes),
+            len(publicaciones_candidateables),
+        )
+
+        logger.info("PASO 4: Enriqueciendo solo publicaciones nuevas...")
         publicaciones_enriquecidas = []
-        for i, pub in enumerate(publicaciones_candidateables):
+        for i, pub in enumerate(publicaciones_pendientes):
             enriquecida = enriquecer_con_gc(pub)
             publicaciones_enriquecidas.append(enriquecida)
             # Log de progreso cada 10 avisos
-            if (i + 1) % 10 == 0 or (i + 1) == len(publicaciones_candidateables):
-                logger.info("  Enriquecidos: %d / %d", i + 1, len(publicaciones_candidateables))
+            if (i + 1) % 10 == 0 or (i + 1) == len(publicaciones_pendientes):
+                logger.info("  Enriquecidos: %d / %d", i + 1, len(publicaciones_pendientes))
 
-        # ── 3. FILTRAR Y PUNTUAR ──────────────────────────
-        logger.info("PASO 3: Aplicando filtros duros y scoring...")
+        # ── 5. FILTRAR Y PUNTUAR ──────────────────────────
+        logger.info("PASO 5: Aplicando filtros duros y scoring...")
         publicaciones_filtradas = aplicar_filtros_y_scoring(publicaciones_enriquecidas)
         logger.info("Pasan el filtro final: %d", len(publicaciones_filtradas))
 
-        # ── 4. DEDUPLICAR Y NOTIFICAR ─────────────────────
-        logger.info("PASO 4: Deduplicando y notificando...")
-        procesados_en_ciclo = set()
+        # ── 6. NOTIFICAR ──────────────────────────────────
+        logger.info("PASO 6: Notificando...")
         for pub in publicaciones_filtradas:
             pub_id = pub["id"]
 
-            if pub_id in procesados_en_ciclo or not es_nueva(pub_id):
-                logger.debug("Ya conocida: %s", pub_id)
-                continue
-
-            procesados_en_ciclo.add(pub_id)
             logger.info(
                 "[NUEVA] %s | $%s | Score: %.0f | %s",
                 pub_id,
@@ -155,15 +175,26 @@ def ejecutar_ciclo(dry_run: bool = False) -> None:
     except KeyboardInterrupt:
         logger.info("Ciclo interrumpido por el usuario.")
         status = "INTERRUPTED"
+        ciclo_ok = False
+    except ScrapeAccessError as exc:
+        logger.error("El portal bloqueó o requiere verificar la búsqueda: %s", exc)
+        status = "BLOCKED"
+        ciclo_ok = False
+    except ScrapeUnavailableError as exc:
+        logger.error("No se pudo obtener una respuesta válida del portal: %s", exc)
+        status = "SCRAPE_ERROR"
+        ciclo_ok = False
     except Exception as exc:
         logger.exception("Error inesperado en el ciclo: %s", exc)
         status = "ERROR"
+        ciclo_ok = False
     finally:
         fin = datetime.now().isoformat()
         if not dry_run:
             registrar_ejecucion(inicio, fin, total_nuevas, total_analizadas, status)
         logger.info("FIN DE CICLO — nuevas: %d — status: %s", total_nuevas, status)
         logger.info("=" * 60)
+    return ciclo_ok
 
 
 # ─────────────────────────────────────────────────────────
@@ -200,7 +231,8 @@ def main() -> None:
     init_db()
 
     # Ejecutar ciclo
-    ejecutar_ciclo(dry_run=args.test)
+    if not ejecutar_ciclo(dry_run=args.test):
+        sys.exit(1)
 
 
 if __name__ == "__main__":
