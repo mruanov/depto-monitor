@@ -17,14 +17,14 @@ import time
 import random
 import logging
 import requests
-from typing import Optional, Tuple, List
+from typing import NamedTuple, Optional, Tuple, List
 
 from bs4 import BeautifulSoup
 
 from config import (
     COMUNAS, COMUNA_SLUGS, BASE_URL_TEMPLATE,
     ITEMS_PER_PAGE, MAX_PAGINAS,
-    DELAY_ENTRE_PAGES, REQUEST_TIMEOUT, USER_AGENTS,
+    DELAY_ENTRE_PAGES, REQUEST_TIMEOUT,
     SECTORES_EXCLUIDOS_PROVIDENCIA, MAX_PRECIO_TOTAL_CLP,
     PALABRAS_CLAVE_NO_VALIDAS
 )
@@ -32,31 +32,54 @@ from uf_helper import obtener_valor_uf
 
 logger = logging.getLogger(__name__)
 
+
+class _FetchResult(NamedTuple):
+    html: Optional[str]
+    status_code: Optional[int]
+    final_url: str
+
+
 # ─────────────────────────────────────────────────────────
 # UTILIDADES
 # ─────────────────────────────────────────────────────────
 
 def _get_headers() -> dict:
     return {
-        "User-Agent": random.choice(USER_AGENTS),
+        "User-Agent": "DeptoMonitor/1.0 (+https://github.com/mruanov/depto-monitor)",
         "Accept-Language": "es-CL,es;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     }
 
 
-def _fetch_html(url: str, retries: int = 3) -> Optional[str]:
-    """Descarga HTML con retry y backoff exponencial."""
+def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
+    """Descarga HTML con reintentos acotados y devuelve el estado de la respuesta."""
+    status_code = None
+    final_url = url
     for attempt in range(1, retries + 1):
         try:
             resp = requests.get(url, headers=_get_headers(), timeout=REQUEST_TIMEOUT)
+            status_code = resp.status_code
+            final_url = resp.url
+            if final_url != url:
+                logger.warning(
+                    "El portal redirigió la búsqueda (HTTP %s): %s -> %s",
+                    status_code, url, final_url,
+                )
             if resp.status_code == 200:
-                return resp.text
-            logger.warning("HTTP %s para %s (intento %d)", resp.status_code, url, attempt)
+                return _FetchResult(resp.text, status_code, final_url)
+
+            logger.warning("HTTP %s para %s (intento %d/%d)", status_code, url, attempt, retries)
+            if status_code in (401, 403, 404):
+                break
+            if status_code < 500 and status_code != 429:
+                break
         except requests.RequestException as exc:
             logger.warning("Error de red (%d/%d): %s", attempt, retries, exc)
-        sleep = 2 ** attempt + random.uniform(0, 1)
-        time.sleep(sleep)
-    return None
+        if attempt < retries:
+            sleep = random.uniform(1, 3)
+            logger.info("Reintento %d/%d en %.1f s.", attempt + 1, retries, sleep)
+            time.sleep(sleep)
+    return _FetchResult(None, status_code, final_url)
 
 
 def _fetch_html_playwright(url: str) -> Optional[str]:
@@ -73,7 +96,6 @@ def _fetch_html_playwright(url: str) -> Optional[str]:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent=random.choice(USER_AGENTS),
                 locale="es-CL",
                 timezone_id="America/Santiago",
             )
@@ -326,7 +348,7 @@ def _parsear_tarjeta(card, comuna: str, uf_valor: float) -> Optional[dict]:
 # ─────────────────────────────────────────────────────────
 
 def _obtener_gc_desde_detalle(url: str, uf_valor: float) -> Optional[int]:
-    html = _fetch_html(url)
+    html = _fetch_html(url).html
     if not html:
         return None
 
@@ -381,11 +403,17 @@ def scrapear_comuna(comuna: str) -> List[dict]:
 
         logger.info("[%s] Scrapeando página %d — %s", comuna, pagina + 1, url)
 
-        html = _fetch_html(url)
+        resultado = _fetch_html(url)
+        html = resultado.html
 
-        if not html:
+        if not html and resultado.status_code not in (401, 403, 429):
             logger.warning("Fallback a Playwright para: %s", url)
             html = _fetch_html_playwright(url)
+        elif not html:
+            logger.warning(
+                "No se usará Playwright tras HTTP %s para evitar repetir una solicitud bloqueada: %s",
+                resultado.status_code, resultado.final_url,
+            )
 
         if not html:
             logger.error("No se pudo obtener HTML para: %s", url)
@@ -394,9 +422,34 @@ def scrapear_comuna(comuna: str) -> List[dict]:
         soup = BeautifulSoup(html, "lxml")
 
         cards = soup.select("li.ui-search-layout__item")
+        if not cards:
+            cards = soup.select("div.poly-card")
 
         if not cards:
-            logger.info("Sin más resultados en página %d para %s", pagina + 1, comuna)
+            texto_html = html.lower()
+            indicadores_bloqueo = (
+                "captcha",
+                "access denied",
+                "acceso denegado",
+                "verify you are human",
+                "security check",
+                "unusual traffic",
+                "robot check",
+                "temporarily blocked",
+            )
+            titulo = soup.title.get_text(" ", strip=True) if soup.title else "(sin título)"
+            if any(indicador in texto_html for indicador in indicadores_bloqueo):
+                logger.warning(
+                    "[%s] Posible bloqueo/CAPTCHA: HTTP 200 sin tarjetas; título=%r, URL final=%s",
+                    comuna, titulo, resultado.final_url,
+                )
+            else:
+                logger.warning(
+                    "[%s] Respuesta HTTP 200 sin tarjetas ui-search-layout__item ni poly-card "
+                    "(%d poly-card detectadas); posible página vacía o cambio de DOM. "
+                    "título=%r, URL final=%s",
+                    comuna, len(soup.select("div[class*='poly-card']")), titulo, resultado.final_url,
+                )
             break
 
         for card in cards:
