@@ -1,0 +1,56 @@
+name: Agente de departamentos
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agente-deptos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  buscar-departamentos:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+    steps:
+      - name: Obtener código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Restaurar historial para deduplicación
+        uses: actions/cache/restore@v4
+        with:
+          path: deptos.db
+          key: deptos-db-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            deptos-db-${{ runner.os }}-${{ github.ref_name }}-
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Ejecutar monitor
+        run: python main.py
+
+      - name: Guardar historial para deduplicación
+        if: always() && !cancelled() && hashFiles('deptos.db') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: deptos.db
+          key: deptos-db-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
