@@ -18,6 +18,7 @@ import random
 import logging
 import requests
 from typing import NamedTuple, Optional, Tuple, List
+from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
@@ -31,6 +32,11 @@ from config import (
 from uf_helper import obtener_valor_uf
 
 logger = logging.getLogger(__name__)
+
+
+def _url_sin_query(url: str) -> str:
+    partes = urlsplit(url)
+    return urlunsplit((partes.scheme, partes.netloc, partes.path, "", ""))
 
 
 class _FetchResult(NamedTuple):
@@ -63,7 +69,7 @@ def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
             if final_url != url:
                 logger.warning(
                     "El portal redirigió la búsqueda (HTTP %s): %s -> %s",
-                    status_code, url, final_url,
+                    status_code, _url_sin_query(url), _url_sin_query(final_url),
                 )
             if resp.status_code == 200:
                 return _FetchResult(resp.text, status_code, final_url)
@@ -441,14 +447,27 @@ def scrapear_comuna(comuna: str) -> List[dict]:
             if any(indicador in texto_html for indicador in indicadores_bloqueo):
                 logger.warning(
                     "[%s] Posible bloqueo/CAPTCHA: HTTP 200 sin tarjetas; título=%r, URL final=%s",
-                    comuna, titulo, resultado.final_url,
+                    comuna, titulo, _url_sin_query(resultado.final_url),
+                )
+            elif "/gz/account-verification" in resultado.final_url.lower():
+                logger.warning(
+                    "[%s] El portal redirigió a verificación de cuenta y no devolvió tarjetas; "
+                    "la búsqueda está bloqueada para este request. URL final=%s",
+                    comuna, _url_sin_query(resultado.final_url),
+                )
+            elif resultado.final_url != url:
+                logger.warning(
+                    "[%s] Redirección sin resultados: HTTP 200 sin tarjetas; "
+                    "posible verificación, bloqueo o página inesperada. URL final=%s",
+                    comuna, _url_sin_query(resultado.final_url),
                 )
             else:
                 logger.warning(
                     "[%s] Respuesta HTTP 200 sin tarjetas ui-search-layout__item ni poly-card "
                     "(%d poly-card detectadas); posible página vacía o cambio de DOM. "
                     "título=%r, URL final=%s",
-                    comuna, len(soup.select("div[class*='poly-card']")), titulo, resultado.final_url,
+                    comuna, len(soup.select("div[class*='poly-card']")), titulo,
+                    _url_sin_query(resultado.final_url),
                 )
             break
 
