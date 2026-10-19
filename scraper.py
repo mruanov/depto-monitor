@@ -5,9 +5,9 @@
 =============================================================
 Estrategia:
 - Requests + BeautifulSoup para el listado (rápido, sin JS)
-- Playwright solo si el listado retorna vacío (fallback JS)
+- Playwright estándar como fallback si requests no obtiene HTML
 - Retry con backoff exponencial ante errores de red
-- Rotación de User-Agent en cada request
+- Identificación explícita del cliente; sin ocultar la automatización
 - Filtrado nativo en URL por precio máximo y arriendo tradicional
 =============================================================
 """
@@ -43,6 +43,14 @@ class _FetchResult(NamedTuple):
     html: Optional[str]
     status_code: Optional[int]
     final_url: str
+
+
+class ScrapeAccessError(RuntimeError):
+    """Portal denied the request or returned an access-verification page."""
+
+
+class ScrapeUnavailableError(RuntimeError):
+    """No usable response was received from the portal."""
 
 
 # ─────────────────────────────────────────────────────────
@@ -88,39 +96,32 @@ def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
     return _FetchResult(None, status_code, final_url)
 
 
-def _fetch_html_playwright(url: str) -> Optional[str]:
-    """Fallback con Playwright + stealth para páginas con JS pesado."""
+def _fetch_html_playwright(url: str) -> _FetchResult:
+    """Fallback con Playwright estándar para páginas que requieren JavaScript."""
+    status_code = None
+    final_url = url
     try:
         from playwright.sync_api import sync_playwright
-        try:
-            from playwright_stealth import stealth_sync
-            use_stealth = True
-        except ImportError:
-            use_stealth = False
-            logger.warning("playwright-stealth no disponible, usando Playwright sin stealth")
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(
-                locale="es-CL",
-                timezone_id="America/Santiago",
-            )
-            page = context.new_page()
-
-            if use_stealth:
-                stealth_sync(page)
-
-            page.set_extra_http_headers({"Accept-Language": "es-CL,es;q=0.9"})
-            page.goto("https://www.portalinmobiliario.com/", timeout=REQUEST_TIMEOUT * 1000)
-            page.wait_for_timeout(2000)
-            page.goto(url, timeout=REQUEST_TIMEOUT * 1000)
-            page.wait_for_timeout(3000)
-            html = page.content()
-            browser.close()
-            return html
+            try:
+                context = browser.new_context(
+                    locale="es-CL",
+                    timezone_id="America/Santiago",
+                )
+                page = context.new_page()
+                response = page.goto(url, timeout=REQUEST_TIMEOUT * 1000)
+                if response:
+                    status_code = response.status
+                final_url = page.url
+                page.wait_for_timeout(3000)
+                return _FetchResult(page.content(), status_code, final_url)
+            finally:
+                browser.close()
     except Exception as exc:
         logger.error("Playwright falló: %s", exc)
-        return None
+        return _FetchResult(None, status_code, final_url)
 
 
 # ─────────────────────────────────────────────────────────
@@ -412,9 +413,27 @@ def scrapear_comuna(comuna: str) -> List[dict]:
         resultado = _fetch_html(url)
         html = resultado.html
 
+        if resultado.status_code in (401, 403, 429):
+            raise ScrapeAccessError(
+                f"Portal rechazó la búsqueda de {comuna} con HTTP {resultado.status_code}."
+            )
+        if "/gz/account-verification" in resultado.final_url.lower():
+            raise ScrapeAccessError(
+                f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
+            )
+
         if not html and resultado.status_code not in (401, 403, 429):
             logger.warning("Fallback a Playwright para: %s", url)
-            html = _fetch_html_playwright(url)
+            resultado = _fetch_html_playwright(url)
+            html = resultado.html
+            if resultado.status_code in (401, 403, 429):
+                raise ScrapeAccessError(
+                    f"Portal rechazó la búsqueda de {comuna} con HTTP {resultado.status_code}."
+                )
+            if "/gz/account-verification" in resultado.final_url.lower():
+                raise ScrapeAccessError(
+                    f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
+                )
         elif not html:
             logger.warning(
                 "No se usará Playwright tras HTTP %s para evitar repetir una solicitud bloqueada: %s",
@@ -423,7 +442,9 @@ def scrapear_comuna(comuna: str) -> List[dict]:
 
         if not html:
             logger.error("No se pudo obtener HTML para: %s", url)
-            break
+            raise ScrapeUnavailableError(
+                f"No se obtuvo HTML para la búsqueda de {comuna}."
+            )
 
         soup = BeautifulSoup(html, "lxml")
 
@@ -449,17 +470,26 @@ def scrapear_comuna(comuna: str) -> List[dict]:
                     "[%s] Posible bloqueo/CAPTCHA: HTTP 200 sin tarjetas; título=%r, URL final=%s",
                     comuna, titulo, _url_sin_query(resultado.final_url),
                 )
+                raise ScrapeAccessError(
+                    f"Portal devolvió una pantalla de bloqueo/CAPTCHA para {comuna}."
+                )
             elif "/gz/account-verification" in resultado.final_url.lower():
                 logger.warning(
                     "[%s] El portal redirigió a verificación de cuenta y no devolvió tarjetas; "
                     "la búsqueda está bloqueada para este request. URL final=%s",
                     comuna, _url_sin_query(resultado.final_url),
                 )
+                raise ScrapeAccessError(
+                    f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
+                )
             elif resultado.final_url != url:
                 logger.warning(
                     "[%s] Redirección sin resultados: HTTP 200 sin tarjetas; "
                     "posible verificación, bloqueo o página inesperada. URL final=%s",
                     comuna, _url_sin_query(resultado.final_url),
+                )
+                raise ScrapeAccessError(
+                    f"Portal redirigió inesperadamente la búsqueda de {comuna}."
                 )
             else:
                 logger.warning(
@@ -469,7 +499,10 @@ def scrapear_comuna(comuna: str) -> List[dict]:
                     comuna, len(soup.select("div[class*='poly-card']")), titulo,
                     _url_sin_query(resultado.final_url),
                 )
-            break
+                raise ScrapeUnavailableError(
+                    f"Respuesta sin tarjetas reconocibles para {comuna}; "
+                    "no se puede distinguir entre cero resultados y un cambio de página."
+                )
 
         for card in cards:
             pub = _parsear_tarjeta(card, comuna, uf_valor)
