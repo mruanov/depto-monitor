@@ -7,12 +7,14 @@
 
 import logging
 import re
+import unicodedata
 from typing import Optional, List
 from config import (
     MAX_PRECIO_TOTAL_CLP,
     COMUNAS,
     SECTORES_EXCLUIDOS_PROVIDENCIA,
     PALABRAS_CLAVE_NO_VALIDAS,
+    TIPOS_PROPIEDAD_NO_VALIDOS,
 )
 from uf_helper import obtener_valor_uf
 
@@ -24,6 +26,65 @@ def _contiene_comuna(texto: str, comuna: str) -> bool:
         rf"(?<![a-z0-9]){re.escape(comuna.lower())}(?![a-z0-9])",
         texto.lower(),
     ) is not None
+
+
+def _normalizar_texto(texto: str) -> str:
+    texto = unicodedata.normalize("NFKD", texto.lower())
+    return "".join(ch for ch in texto if not unicodedata.combining(ch))
+
+
+def _contiene_termino(texto: str, termino: str) -> bool:
+    return re.search(
+        rf"(?<![a-z0-9]){re.escape(termino)}(?![a-z0-9])",
+        texto,
+    ) is not None
+
+
+def _es_publicacion_no_valida(titulo: str, descripcion: str) -> Optional[str]:
+    titulo_normalizado = _normalizar_texto(titulo)
+    contenido_normalizado = _normalizar_texto(f"{titulo} {descripcion}")
+
+    for palabra in PALABRAS_CLAVE_NO_VALIDAS:
+        if _contiene_termino(contenido_normalizado, _normalizar_texto(palabra)):
+            return palabra
+
+    tipos_depto = ("departamento", "depto", "studio", "estudio", "loft")
+    es_departamento = any(
+        _contiene_termino(titulo_normalizado, tipo) for tipo in tipos_depto
+    ) or re.search(
+        r"\b\d+\s*d\s*\d+\s*b\b|\b\d+\s*dormitorios?\b",
+        titulo_normalizado,
+    ) is not None
+    for tipo in TIPOS_PROPIEDAD_NO_VALIDOS:
+        tipo_normalizado = _normalizar_texto(tipo)
+        if not _contiene_termino(titulo_normalizado, tipo_normalizado):
+            continue
+        if tipo_normalizado in ("bodega", "estacionamiento") and es_departamento:
+            continue
+        return tipo
+
+    menciona_pieza_en_titulo = any(
+        _contiene_termino(titulo_normalizado, termino)
+        for termino in ("pieza", "habitacion", "habitaciones")
+    )
+    menciona_compartido_en_titulo = any(
+        _contiene_termino(titulo_normalizado, termino)
+        for termino in ("compartido", "compartida")
+    )
+    if menciona_compartido_en_titulo:
+        return "alojamiento compartido"
+    if menciona_pieza_en_titulo and not es_departamento:
+        return "arriendo de pieza o habitación"
+
+    habitacion_en_arriendo = re.search(
+        r"\b(?:pieza|habitacion|habitaciones)\b.{0,45}\b(?:arriendo|arrienda|compartid[oa])\b"
+        r"|\b(?:arriendo|arrienda|compartid[oa])\b.{0,45}\b(?:pieza|habitacion|habitaciones)\b",
+        contenido_normalizado,
+    )
+    if habitacion_en_arriendo:
+        return "arriendo de pieza o habitación"
+
+    return None
 
 
 # ─────────────────────────────────────────────────────────
@@ -58,7 +119,7 @@ def calcular_precio_total(pub: dict) -> Optional[int]:
 
 def filtrar_ubicacion(pub: dict) -> bool:
     """
-    Valida estrictamente que la publicación pertenezca a Las Condes, Vitacura o Providencia,
+    Valida estrictamente que la publicación pertenezca a una comuna monitoreada,
     y que no caiga en los sectores excluidos de Providencia. Bloquea la publicidad externa.
     """
     comuna_publicacion = str(pub.get("comuna", ""))
@@ -77,15 +138,25 @@ def filtrar_ubicacion(pub: dict) -> bool:
         return False
 
     # 2. Eliminar avisos claramente no residenciales o de publicidad masiva.
-    texto_aviso = f"{texto_direccion} {pub.get('titulo', '')}".lower()
-    if any(palabra in texto_aviso for palabra in PALABRAS_CLAVE_NO_VALIDAS):
-        logger.debug("Descartado por palabra clave no válida: %s", pub.get("id"))
+    titulo = str(pub.get("titulo", ""))
+    descripcion = " ".join([
+        str(pub.get("descripcion", "")),
+        str(pub.get("descripcion_corta", "")),
+    ])
+    palabra_no_valida = _es_publicacion_no_valida(titulo, descripcion)
+    if palabra_no_valida:
+        logger.debug(
+            "Descartado por palabra clave no válida (%s): %s",
+            palabra_no_valida,
+            pub.get("id"),
+        )
         return False
 
     # 3. Comprobar que no esté en sectores excluidos (ej. Providencia periférica)
     if comuna_objetivo == "Providencia":
+        texto_aviso = f"{texto_direccion} {titulo}".lower()
         for sector in SECTORES_EXCLUIDOS_PROVIDENCIA:
-            if sector.lower() in texto_aviso:
+            if _normalizar_texto(sector) in _normalizar_texto(texto_aviso):
                 logger.debug("Descartado por sector excluido de Providencia (%s): %s", sector, pub.get("id"))
                 return False
 

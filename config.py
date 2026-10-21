@@ -15,18 +15,21 @@ Las credenciales Telegram se leen desde variables de entorno
 MAX_PRECIO_TOTAL_CLP = 470_000
 
 # Comunas a monitorear
-COMUNAS = ["Las Condes", "Vitacura", "Providencia"]
+COMUNAS = ["Las Condes", "Vitacura", "Providencia", "Lo Barnechea"]
 
 # Sectores a EXCLUIR dentro de Providencia (palabras clave en dirección/título)
 # Si aparece cualquiera de estas palabras en la dirección, se descarta el aviso.
 SECTORES_EXCLUIDOS_PROVIDENCIA = [
     "bellavista",
+    "plaza italia",
     "barrio italia",
     "italia",       # cubre "barrio italia"
     "salvador",
     "baquedano",
     "vicuña mackenna",
     "vicuna mackenna",
+    "vicuña mackena",
+    "vicuna mackena",
     "av. vicuña",
     "av vicuna",
 ]
@@ -52,6 +55,7 @@ DB_PATH = "deptos.db"
 DELAY_ENTRE_PAGES  = 2.5   # segundos entre páginas
 MAX_PAGINAS        = 1     # SOLO LA PRIMERA PÁGINA PARA VER LO MÁS RECIENTE
 REQUEST_TIMEOUT    = 30    # segundos de timeout por request
+UF_REQUEST_TIMEOUT = 8     # la consulta de UF no debe bloquear todo el ciclo
 
 # Contenido que debe ser descartado antes del enriquecimiento por ser publicidad,
 # proyectos nuevos, arriendos temporales o avisos no residenciales.
@@ -62,13 +66,31 @@ PALABRAS_CLAVE_NO_VALIDAS = [
     "temporal",
     "residencia",
     "estudiantil",
-    "oficina",
     "pieza con baño",
     "pieza en arriendo",
     "patrocinado",
     "nuevoproyecto",
     "arriendo diario",
     "alquiler temporal",
+    "administracion de propiedades",
+    "administración de propiedades",
+    "corretaje",
+    "comision",
+    "comisión",
+    "asesoria",
+    "asesoría",
+    "gestion de arriendo",
+    "gestión de arriendo",
+]
+
+# Tipos de publicación que solo se descartan cuando aparecen como propiedad
+# ofrecida en el título; no cuando se mencionan como accesorios.
+TIPOS_PROPIEDAD_NO_VALIDOS = [
+    "oficina",
+    "terreno",
+    "estacionamiento",
+    "bodega",
+    "local comercial",
 ]
 
 # ──────────────────────────────────────────────────────────
@@ -80,12 +102,13 @@ COMUNA_SLUGS = {
     "Las Condes":  "las-condes-metropolitana",
     "Vitacura":    "vitacura-metropolitana",
     "Providencia": "providencia-metropolitana",
+    "Lo Barnechea": "lo-barnechea-metropolitana",
 }
 
 # Búsqueda por comuna, limitada por precio de arriendo y ordenada por fecha.
 BASE_URL_TEMPLATE = (
     "https://www.portalinmobiliario.com/arriendo/departamento/{comuna}/"
-    "_PriceRange_0-{max_precio}_O_DateCreatedDESC"
+    "_PriceRange_0-{max_precio}_NoIndex_True_O_DateCreatedDESC"
 )
 
 # Cantidad de avisos por página en Portal Inmobiliario (normalmente 48)
@@ -95,7 +118,7 @@ ITEMS_PER_PAGE = 48
 # VALOR DE REFERENCIA UF (se actualiza automáticamente)
 # ──────────────────────────────────────────────────────────
 # Si la API de UF falla, se usa este valor de respaldo
-UF_FALLBACK = 38_000  # CLP por UF (actualiza si es necesario)
+UF_FALLBACK = 41_189  # Referencia del 2026-10-20; se usa solo sin cache reciente
 
 # ──────────────────────────────────────────────────────────
 # LOGGING

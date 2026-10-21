@@ -5,14 +5,49 @@
 =============================================================
 """
 
+import html
 import logging
 import requests
 from typing import Optional
+from urllib.parse import urlsplit, urlunsplit
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, REQUEST_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+
+def _error_sin_credenciales(exc: Exception) -> str:
+    mensaje = str(exc)
+    if TELEGRAM_BOT_TOKEN:
+        mensaje = mensaje.replace(TELEGRAM_BOT_TOKEN, "[REDACTED]")
+    return mensaje
+
+
+def _limpiar_url(url: Optional[str]) -> Optional[str]:
+    if not isinstance(url, str) or not url:
+        return None
+
+    url = url.strip()
+    if any(ord(caracter) < 32 or caracter.isspace() for caracter in url):
+        return None
+
+    try:
+        partes = urlsplit(url)
+        if partes.scheme.lower() not in ("http", "https") or not partes.hostname:
+            return None
+        partes.port
+        if partes.username or partes.password:
+            return None
+        return urlunsplit((
+            partes.scheme.lower(),
+            partes.netloc,
+            partes.path,
+            partes.query,
+            "",
+        ))
+    except ValueError:
+        return None
 
 
 def _formato_clp(valor: Optional[int]) -> str:
@@ -28,10 +63,7 @@ def _formato_uf(valor: Optional[float]) -> str:
 
 
 def _construir_mensaje(pub: dict) -> str:
-    """
-    Construye la ficha compacta en formato Telegram (HTML).
-    Usa HTML parse_mode para evitar fallos con URLs (regla GEMINI.md de Claude_Projects).
-    """
+    """Construye la ficha compacta como texto plano para Telegram."""
     emoji_comuna = {
         "Las Condes":  "🏙️",
         "Vitacura":    "🌿",
@@ -53,12 +85,18 @@ def _construir_mensaje(pub: dict) -> str:
     banos_txt    = str(pub["banos"])       if pub.get("banos")       is not None else "—"
     score_stars  = "⭐" * max(1, min(5, int(pub.get("score", 0) / 20)))
 
-    titulo_safe  = (pub.get('titulo', 'Sin título') or '').replace('<', '&lt;').replace('>', '&gt;')
-    ubic_safe    = (pub.get('ubicacion', pub.get('comuna', '')) or '').replace('<', '&lt;').replace('>', '&gt;')
+    titulo = html.escape(pub.get("titulo", "Sin título") or "Sin título")
+    ubicacion = html.escape(pub.get("ubicacion", pub.get("comuna", "")) or "")
+    url_publicacion = _limpiar_url(pub.get("url"))
+    enlace = (
+        f'<a href="{html.escape(url_publicacion, quote=True)}">Ver publicación</a>'
+        if url_publicacion
+        else "URL no disponible"
+    )
 
     lines = [
-        f"{emoji_comuna} <b>{titulo_safe}</b>",
-        f"📍 {ubic_safe}",
+        f"{emoji_comuna} <b>{titulo}</b>",
+        f"📍 {ubicacion}",
         "",
         f"💰 Arriendo: {arriendo_txt}",
         f"🏦 GC: {gc_txt}",
@@ -70,13 +108,13 @@ def _construir_mensaje(pub: dict) -> str:
         "",
         f"{score_stars} Score: {pub.get('score', 0):.0f}/100",
         "",
-        f"🔗 <a href=\"{pub.get('url', '')}\">Ver publicación</a>",
+        f"🔗 {enlace}",
     ]
     return "\n".join(lines)
 
 
 def _enviar_mensaje(texto: str) -> bool:
-    """Envía un mensaje de texto al chat de Telegram (HTML parse_mode)."""
+    """Envía un mensaje de texto plano al chat de Telegram."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("No se puede enviar Telegram: faltan las credenciales de entorno.")
         return False
@@ -98,15 +136,20 @@ def _enviar_mensaje(texto: str) -> bool:
             return False
         return True
     except Exception as exc:
-        logger.error("Error enviando mensaje Telegram: %s", exc)
+        logger.error("Error enviando mensaje Telegram: %s", _error_sin_credenciales(exc))
         return False
 
 
 def _enviar_foto_con_caption(imagen_url: str, caption: str) -> bool:
-    """Envía una imagen con caption al chat de Telegram (HTML parse_mode)."""
+    """Envía una imagen limpia con caption de texto plano."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         logger.error("No se puede enviar Telegram: faltan las credenciales de entorno.")
         return False
+
+    imagen_url = _limpiar_url(imagen_url)
+    if not imagen_url:
+        logger.warning("URL de foto inválida; enviando solo texto.")
+        return _enviar_mensaje(caption)
 
     try:
         resp = requests.post(
@@ -124,7 +167,10 @@ def _enviar_foto_con_caption(imagen_url: str, caption: str) -> bool:
         logger.warning("Foto no enviada (HTTP %s), enviando texto solo", resp.status_code)
         return _enviar_mensaje(caption)
     except Exception as exc:
-        logger.warning("Error enviando foto: %s. Enviando solo texto.", exc)
+        logger.warning(
+            "Error enviando foto: %s. Enviando solo texto.",
+            _error_sin_credenciales(exc),
+        )
         return _enviar_mensaje(caption)
 
 
@@ -135,8 +181,12 @@ def notificar_publicacion(pub: dict) -> bool:
     """
     mensaje = _construir_mensaje(pub)
 
+    imagen_url = _limpiar_url(pub.get("imagen_url"))
+    if imagen_url:
+        return _enviar_foto_con_caption(imagen_url, mensaje)
     if pub.get("imagen_url"):
-        return _enviar_foto_con_caption(pub["imagen_url"], mensaje)
+        logger.warning("URL de foto inválida; enviando solo texto.")
+        return _enviar_mensaje(mensaje)
     else:
         return _enviar_mensaje(mensaje)
 
@@ -161,5 +211,5 @@ def verificar_conexion_telegram() -> bool:
         logger.error("Token Telegram inválido (HTTP %s)", resp.status_code)
         return False
     except Exception as exc:
-        logger.error("No se puede conectar a Telegram: %s", exc)
+        logger.error("No se puede conectar a Telegram: %s", _error_sin_credenciales(exc))
         return False

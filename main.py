@@ -25,6 +25,7 @@ from config import (
 from database import init_db, es_nueva, guardar_publicacion, marcar_notificado, registrar_ejecucion
 from scraper import (
     ScrapeAccessError,
+    ScrapePartialError,
     ScrapeUnavailableError,
     scrapear_todas_las_comunas,
     enriquecer_con_gc,
@@ -77,13 +78,23 @@ def ejecutar_ciclo(dry_run: bool = False) -> bool:
     try:
         # ── 1. SCRAPING ──────────────────────────────────
         logger.info("PASO 1: Scrapeando Portal Inmobiliario...")
-        publicaciones_crudas = scrapear_todas_las_comunas()
+        try:
+            publicaciones_crudas = scrapear_todas_las_comunas()
+        except ScrapePartialError as exc:
+            publicaciones_crudas = exc.publicaciones
+            status = "WARN_PARTIAL"
+            logger.warning(
+                "%s Fallaron %d comuna(s); se procesarán los avisos obtenidos.",
+                exc,
+                len(exc.errores),
+            )
         total_analizadas = len(publicaciones_crudas)
         logger.info("Total publicaciones scraped: %d", total_analizadas)
 
         if not publicaciones_crudas:
             logger.warning("No se obtuvieron publicaciones. Verifique la conectividad.")
-            status = "WARN_EMPTY"
+            if status != "WARN_PARTIAL":
+                status = "WARN_EMPTY"
             return True
 
         # ── 2. PRE-FILTRADO RÁPIDO Y ENRIQUECIMIENTO ───────

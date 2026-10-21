@@ -26,8 +26,7 @@ from config import (
     COMUNAS, COMUNA_SLUGS, BASE_URL_TEMPLATE,
     ITEMS_PER_PAGE, MAX_PAGINAS,
     DELAY_ENTRE_PAGES, REQUEST_TIMEOUT,
-    SECTORES_EXCLUIDOS_PROVIDENCIA, MAX_PRECIO_TOTAL_CLP,
-    PALABRAS_CLAVE_NO_VALIDAS
+    SECTORES_EXCLUIDOS_PROVIDENCIA, MAX_PRECIO_TOTAL_CLP
 )
 from uf_helper import obtener_valor_uf
 
@@ -53,6 +52,17 @@ class ScrapeUnavailableError(RuntimeError):
     """No usable response was received from the portal."""
 
 
+class ScrapePartialError(ScrapeUnavailableError):
+    """Some communes failed, but publications were collected from the others."""
+
+    def __init__(self, publicaciones: List[dict], errores: List[Exception]):
+        super().__init__(
+            f"Scraping parcial: {len(errores)} comuna(s) no pudieron consultarse."
+        )
+        self.publicaciones = publicaciones
+        self.errores = errores
+
+
 # ─────────────────────────────────────────────────────────
 # UTILIDADES
 # ─────────────────────────────────────────────────────────
@@ -69,23 +79,28 @@ def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
     """Descarga HTML con reintentos acotados y devuelve el estado de la respuesta."""
     status_code = None
     final_url = url
+    error_html = None
     for attempt in range(1, retries + 1):
         try:
             resp = requests.get(url, headers=_get_headers(), timeout=REQUEST_TIMEOUT)
             status_code = resp.status_code
             final_url = resp.url
             if final_url != url:
-                logger.warning(
-                    "El portal redirigió la búsqueda (HTTP %s): %s -> %s",
+                log = logger.info if status_code == 200 else logger.warning
+                log(
+                    "El portal normalizó/redirigió la URL (HTTP %s): %s -> %s",
                     status_code, _url_sin_query(url), _url_sin_query(final_url),
                 )
             if resp.status_code == 200:
                 return _FetchResult(resp.text, status_code, final_url)
+            if status_code == 404:
+                error_html = resp.text
 
-            logger.warning("HTTP %s para %s (intento %d/%d)", status_code, url, attempt, retries)
-            if status_code in (401, 403, 404):
+            log = logger.info if status_code == 404 else logger.warning
+            log("HTTP %s para %s (intento %d/%d)", status_code, url, attempt, retries)
+            if status_code in (401, 403, 404, 429):
                 break
-            if status_code < 500 and status_code != 429:
+            if status_code < 500:
                 break
         except requests.RequestException as exc:
             logger.warning("Error de red (%d/%d): %s", attempt, retries, exc)
@@ -93,7 +108,7 @@ def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
             sleep = random.uniform(1, 3)
             logger.info("Reintento %d/%d en %.1f s.", attempt + 1, retries, sleep)
             time.sleep(sleep)
-    return _FetchResult(None, status_code, final_url)
+    return _FetchResult(error_html, status_code, final_url)
 
 
 def _fetch_html_playwright(url: str) -> _FetchResult:
@@ -220,6 +235,25 @@ def _contiene_comuna(texto: str, comuna: str) -> bool:
     ) is not None
 
 
+def _construir_url_busqueda(slug: str, pagina: int) -> str:
+    url = BASE_URL_TEMPLATE.format(
+        comuna=slug,
+        max_precio=MAX_PRECIO_TOTAL_CLP,
+    )
+    if pagina > 0:
+        url += f"_Desde_{pagina * ITEMS_PER_PAGE + 1}"
+    return url
+
+
+def _es_pagina_sin_resultados(html: str) -> bool:
+    soup = BeautifulSoup(html, "lxml")
+    return (
+        soup.select_one(".ui-search-rescue--zrp") is not None
+        or "no hay inmuebles que coincidan con tu búsqueda"
+        in soup.get_text(" ", strip=True).lower()
+    )
+
+
 def _card_es_publicacion_valida(card, comuna: str, ubicacion: str) -> bool:
     """Descarta rápidamente avisos patrocinados, proyectos o propiedades fuera de la comuna."""
     texto = _obtener_texto_tarjeta(card)
@@ -227,9 +261,6 @@ def _card_es_publicacion_valida(card, comuna: str, ubicacion: str) -> bool:
         return False
 
     if not _contiene_comuna(ubicacion, comuna):
-        return False
-
-    if any(palabra in texto for palabra in PALABRAS_CLAVE_NO_VALIDAS):
         return False
 
     if comuna == "Providencia":
@@ -354,30 +385,38 @@ def _parsear_tarjeta(card, comuna: str, uf_valor: float) -> Optional[dict]:
 # DETALLE DE PUBLICACIÓN
 # ─────────────────────────────────────────────────────────
 
-def _obtener_gc_desde_detalle(url: str, uf_valor: float) -> Optional[int]:
+def _obtener_detalle_publicacion(
+    url: str,
+    uf_valor: float,
+) -> Tuple[Optional[int], Optional[str]]:
     html = _fetch_html(url).html
     if not html:
-        return None
+        return None, None
 
     soup = BeautifulSoup(html, "lxml")
-
-    for row in soup.select("tr, li, .ui-pdp-feature"):
-        txt = row.get_text(" ", strip=True).lower()
-        if "gastos" in txt or "gasto comun" in txt or " gc " in txt:
-            gc = _extraer_gc_de_descripcion(txt, uf_valor)
-            if gc is not None:
-                return gc
-
+    descripcion = None
     desc_tag = soup.select_one(
         ".ui-pdp-description__content, p[class*='description'], "
         "[data-testid='description']"
     )
     if desc_tag:
-        gc = _extraer_gc_de_descripcion(desc_tag.get_text(" ", strip=True), uf_valor)
-        if gc:
-            return gc
+        descripcion = desc_tag.get_text(" ", strip=True)
+    else:
+        meta_desc = soup.select_one('meta[name="description"], meta[property="og:description"]')
+        if meta_desc:
+            descripcion = meta_desc.get("content")
 
-    return None
+    gc_clp = None
+    for row in soup.select("tr, li, .ui-pdp-feature"):
+        txt = row.get_text(" ", strip=True).lower()
+        if "gastos" in txt or "gasto comun" in txt or " gc " in txt:
+            gc = _extraer_gc_de_descripcion(txt, uf_valor)
+            if gc is not None:
+                gc_clp = gc
+                break
+    if gc_clp is None and descripcion:
+        gc_clp = _extraer_gc_de_descripcion(descripcion, uf_valor)
+    return gc_clp, descripcion
 
 
 # ─────────────────────────────────────────────────────────
@@ -398,15 +437,7 @@ def scrapear_comuna(comuna: str) -> List[dict]:
     publicaciones = []
 
     for pagina in range(MAX_PAGINAS):
-        offset = pagina * ITEMS_PER_PAGE + 1 if pagina > 0 else 1
-
-        url = BASE_URL_TEMPLATE.format(
-            comuna=slug,
-            max_precio=MAX_PRECIO_TOTAL_CLP,
-        )
-        if pagina > 0:
-            url += f"_Desde_{offset}"
-        url += "_NoIndex_True"
+        url = _construir_url_busqueda(slug, pagina)
 
         logger.info("[%s] Scrapeando página %d — %s", comuna, pagina + 1, url)
 
@@ -422,7 +453,7 @@ def scrapear_comuna(comuna: str) -> List[dict]:
                 f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
             )
 
-        if not html and resultado.status_code not in (401, 403, 429):
+        if not html and resultado.status_code not in (401, 403, 404, 429):
             logger.warning("Fallback a Playwright para: %s", url)
             resultado = _fetch_html_playwright(url)
             html = resultado.html
@@ -453,6 +484,22 @@ def scrapear_comuna(comuna: str) -> List[dict]:
             cards = soup.select("div.poly-card")
 
         if not cards:
+            if resultado.status_code == 404 and _es_pagina_sin_resultados(html):
+                logger.info(
+                    "[%s] El portal confirmó que no hay avisos que cumplan la búsqueda.",
+                    comuna,
+                )
+                break
+            if resultado.status_code == 404:
+                logger.warning(
+                    "[%s] HTTP 404 sin el indicador de búsqueda vacía; URL final=%s",
+                    comuna,
+                    _url_sin_query(resultado.final_url),
+                )
+                raise ScrapeUnavailableError(
+                    f"Portal devolvió HTTP 404 inesperado para {comuna}."
+                )
+
             texto_html = html.lower()
             indicadores_bloqueo = (
                 "captcha",
@@ -522,16 +569,43 @@ def scrapear_comuna(comuna: str) -> List[dict]:
 
 def scrapear_todas_las_comunas() -> List[dict]:
     todas = []
+    errores = []
     for comuna in COMUNAS:
-        avisos = scrapear_comuna(comuna)
+        try:
+            avisos = scrapear_comuna(comuna)
+        except ScrapeAccessError:
+            logger.warning(
+                "[%s] El portal denegó el acceso; se detendrá el ciclo para no insistir.",
+                comuna,
+            )
+            raise
+        except ScrapeUnavailableError as exc:
+            logger.warning(
+                "[%s] No se pudo completar el scraping; se continuará con las demás comunas: %s",
+                comuna,
+                exc,
+            )
+            errores.append(exc)
+            time.sleep(DELAY_ENTRE_PAGES * 2)
+            continue
+
         todas.extend(avisos)
         time.sleep(DELAY_ENTRE_PAGES * 2)
+
+    if errores and len(errores) == len(COMUNAS):
+        raise errores[0]
+    if errores:
+        raise ScrapePartialError(todas, errores)
+
     return todas
 
 
 def enriquecer_con_gc(pub: dict) -> dict:
-    if pub.get("gc_clp") is None:
+    if pub.get("gc_clp") is None or not pub.get("descripcion"):
         uf_valor = obtener_valor_uf()
-        gc = _obtener_gc_desde_detalle(pub["url"], uf_valor)
-        pub["gc_clp"] = gc
+        gc, descripcion = _obtener_detalle_publicacion(pub["url"], uf_valor)
+        if pub.get("gc_clp") is None:
+            pub["gc_clp"] = gc
+        if descripcion:
+            pub["descripcion"] = descripcion
     return pub
