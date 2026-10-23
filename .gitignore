@@ -23,3 +23,6 @@ env/
 # Editor / OS files
 .DS_Store
 .vscode/
+
+# Scripts temporales de pruebas
+scratch/
