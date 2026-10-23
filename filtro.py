@@ -40,6 +40,55 @@ def _contiene_termino(texto: str, termino: str) -> bool:
     ) is not None
 
 
+_PATRONES_PRECIO_POSTERIOR = (
+    re.compile(
+        r"\ba partir del? (?:segundo|2do|2°|2º)\s+mes\b"
+        r"|\ba contar del? (?:segundo|2do|2°|2º)\s+mes\b"
+        r"|\bdesde el? (?:segundo|2do|2°|2º)\s+mes\b"
+        r"|\bsegundo mes\b"
+        r"|\bluego\b"
+        r"|\bdespues\b"
+        r"|\bposteriormente\b"
+        r"|\bprecio normal\b"
+        r"|\bvalor normal\b"
+        r"|\barriendo normal\b"
+    ),
+)
+_PATRON_MONTO = re.compile(
+    r"(?P<clp>\$\s*\d[\d.,]*)"
+    r"|(?P<uf_antes>\buf\s*\d[\d.,]*)"
+    r"|(?P<uf_despues>\d[\d.,]*\s*uf\b)"
+)
+
+
+def _precio_posterior_excede_limite(
+    texto: str, gastos_comunes: int = 0
+) -> bool:
+    texto_normalizado = _normalizar_texto(texto)
+    separadores_oracion = re.compile(r"[!?\n;]|[.](?!\d)")
+
+    for marcador in _PATRONES_PRECIO_POSTERIOR:
+        for coincidencia in marcador.finditer(texto_normalizado):
+            resto = texto_normalizado[coincidencia.end():]
+            corte = separadores_oracion.search(resto)
+            clausula = resto[:corte.start()] if corte else resto
+            monto = _PATRON_MONTO.search(clausula[:120])
+            if not monto:
+                continue
+
+            if monto.group("clp"):
+                valor_clp = int(re.sub(r"\D", "", monto.group("clp")))
+            else:
+                texto_monto = monto.group("uf_antes") or monto.group("uf_despues")
+                valor_uf = float(re.search(r"\d[\d.,]*", texto_monto).group().replace(",", "."))
+                valor_clp = int(valor_uf * obtener_valor_uf())
+
+            if valor_clp + gastos_comunes > MAX_PRECIO_TOTAL_CLP:
+                return True
+
+    return False
+
+
 def _es_publicacion_no_valida(titulo: str, descripcion: str) -> Optional[str]:
     titulo_normalizado = _normalizar_texto(titulo)
     contenido_normalizado = _normalizar_texto(f"{titulo} {descripcion}")
@@ -143,6 +192,15 @@ def filtrar_ubicacion(pub: dict) -> bool:
         str(pub.get("descripcion", "")),
         str(pub.get("descripcion_corta", "")),
     ])
+    if _precio_posterior_excede_limite(
+        f"{titulo} {descripcion}", pub.get("gc_clp") or 0
+    ):
+        logger.debug(
+            "Descartado por precio posterior sobre el límite: %s",
+            pub.get("id"),
+        )
+        return False
+
     palabra_no_valida = _es_publicacion_no_valida(titulo, descripcion)
     if palabra_no_valida:
         logger.debug(

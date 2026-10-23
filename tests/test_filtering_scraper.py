@@ -106,6 +106,55 @@ class KeywordFilterTests(unittest.TestCase):
             )
         )
 
+    def test_allows_promotion_terms_without_over_budget_future_price(self):
+        publications = (
+            self.publication("Departamento en promoción"),
+            self.publication(
+                "Departamento en arriendo",
+                "Descuento del 20% durante el primer mes.",
+            ),
+            self.publication(
+                "Departamento en arriendo",
+                "Promoción: a partir del segundo mes, precio normal $450.000.",
+            ),
+        )
+        for publication in publications:
+            with self.subTest(description=publication["descripcion"]):
+                self.assertTrue(filtro.filtrar_ubicacion(publication))
+
+    def test_rejects_future_price_over_limit_in_clp_or_uf(self):
+        publications = (
+            self.publication(
+                "Departamento en arriendo",
+                "Promoción: a partir del segundo mes, $500.000.",
+            ),
+            self.publication(
+                "Departamento en arriendo",
+                "Descuento inicial; luego 12 UF.",
+            ),
+        )
+        for publication in publications:
+            with self.subTest(description=publication["descripcion"]):
+                with patch("filtro.obtener_valor_uf", return_value=41_189):
+                    self.assertFalse(filtro.filtrar_ubicacion(publication))
+
+    def test_future_price_comparison_includes_common_expenses(self):
+        publication = self.publication(
+            "Departamento en arriendo",
+            "Precio normal desde el segundo mes: $450.000.",
+        )
+        publication["gc_clp"] = 30_000
+        self.assertFalse(filtro.filtrar_ubicacion(publication))
+
+    def test_future_price_within_limit_is_allowed_in_final_filter(self):
+        publication = self.publication(
+            "Departamento en arriendo",
+            "Luego el arriendo queda en 10 UF.",
+        )
+        publication.update({"precio_clp": 400_000, "gc_clp": 0})
+        with patch("filtro.obtener_valor_uf", return_value=41_189):
+            self.assertTrue(filtro.filtrar_publicacion(publication))
+
     def test_final_filter_keeps_valid_price_and_rejects_over_limit(self):
         with patch("filtro.obtener_valor_uf", return_value=41_189):
             valid = self.publication("Departamento independiente")
