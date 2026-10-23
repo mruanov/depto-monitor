@@ -194,10 +194,24 @@ class ScraperTests(unittest.TestCase):
         )
         self.assertTrue(next_page.endswith("_Desde_49"))
 
+    def test_soup_falls_back_to_html_parser_without_lxml(self):
+        real_soup = scraper.BeautifulSoup
+
+        def fake_soup(html, features=None, **kwargs):
+            if features == "lxml":
+                raise scraper.FeatureNotFound("lxml no disponible")
+            return real_soup(html, features, **kwargs)
+
+        with patch.object(scraper, "BeautifulSoup", side_effect=fake_soup) as soup:
+            result = scraper._crear_soup("<div>ok</div>")
+
+        self.assertEqual(result.div.get_text(strip=True), "ok")
+        self.assertEqual(soup.call_args_list[0].args[1], "lxml")
+        self.assertEqual(soup.call_args_list[1].args[1], "html.parser")
+
     def test_card_attributes_about_accessories_do_not_drop_department(self):
-        card = scraper.BeautifulSoup(
-            "<div><span>Bodega y estacionamiento disponibles</span></div>",
-            "lxml",
+        card = scraper._crear_soup(
+            "<div><span>Bodega y estacionamiento disponibles</span></div>"
         ).div
         self.assertTrue(
             scraper._card_es_publicacion_valida(

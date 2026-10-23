@@ -1,116 +1,22 @@
-name: Agente de departamentos
+# INFORMATIVO: el scraping real se ejecuta en un Android TV Box con Termux
+# (ver README_ANDROID.md). Portal Inmobiliario bloquea las IPs de datacenter
+# de GitHub Actions y redirige a /gz/account-verification, por lo que este
+# workflow ya no realiza búsquedas ni envía alertas de propiedades.
+name: Agente de departamentos (informativo)
 
 on:
-  schedule:
-    - cron: "0 */4 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: agente-deptos-${{ github.ref }}
-  cancel-in-progress: false
-
 jobs:
-  buscar-departamentos:
+  informar:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
     steps:
-      - name: Obtener código
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Restaurar historial para deduplicación
-        uses: actions/cache/restore@v4
-        with:
-          path: deptos.db
-          key: deptos-db-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            deptos-db-${{ runner.os }}-${{ github.ref_name }}-
-
-      - name: Instalar dependencias
+      - name: Explicar estado del monitoreo
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
-
-      - name: Ejecutar pruebas
-        run: python -m unittest discover -s tests -v
-
-      - name: Ejecutar monitor
-        run: python main.py
-
-      - name: Guardar historial para deduplicación
-        if: success() && hashFiles('deptos.db') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: deptos.db
-          key: deptos-db-${{ runner.os }}-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
-
-      - name: Notificar fallo por Telegram
-        if: failure()
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          python - <<'PY'
-          import html
-          import os
-          import sys
-
-          import requests
-
-          token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-          chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-          if not token or not chat_id:
-              raise SystemExit(
-                  "No se pudo enviar la alerta: faltan los secretos de Telegram."
-              )
-
-          run_url = html.escape(os.environ["RUN_URL"], quote=True)
-          message = (
-              "<b>⚠️ Monitor de departamentos: ejecución fallida</b>\n"
-              "El scraping no terminó correctamente. No se confirmó una búsqueda "
-              "completa ni se enviaron alertas de nuevas publicaciones en esta ejecución.\n"
-              f'<a href="{run_url}">Ver logs de GitHub Actions</a>'
-          )
-          try:
-              response = requests.post(
-                  f"https://api.telegram.org/bot{token}/sendMessage",
-                  json={
-                      "chat_id": chat_id,
-                      "text": message,
-                      "parse_mode": "HTML",
-                      "disable_web_page_preview": True,
-                  },
-                  timeout=20,
-              )
-          except requests.RequestException as exc:
-              raise SystemExit(
-                  f"No se pudo conectar con Telegram ({type(exc).__name__})."
-              ) from None
-
-          try:
-              result = response.json()
-          except ValueError:
-              raise SystemExit(
-                  f"Telegram devolvió una respuesta no válida (HTTP {response.status_code})."
-              ) from None
-
-          if not response.ok or result.get("ok") is not True:
-              raise SystemExit(
-                  f"Telegram rechazó la alerta (HTTP {response.status_code})."
-              )
-          PY
+          echo "::notice::El monitor corre localmente en Termux (Android TV Box)."
+          echo "GitHub Actions no puede acceder a Portal Inmobiliario:"
+          echo "las IPs de datacenter son redirigidas a la verificación de cuenta."
+          echo "Instrucciones: README_ANDROID.md"

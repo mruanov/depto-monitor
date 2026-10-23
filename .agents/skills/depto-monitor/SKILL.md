@@ -13,64 +13,76 @@ description: >
 
 ## Propósito
 Ejecutar el agente de búsqueda de departamentos ubicado en `/Users/mruanov/Documents/Deptos/`.
+El monitoreo programado corre en un Android TV Box con Termux (red residencial).
+GitHub Actions quedó solo como workflow informativo porque Portal Inmobiliario
+bloquea las IPs de datacenter y redirige a `/gz/account-verification`.
 
 ## Estructura del proyecto
 ```
 Deptos/
-├── main.py          ← Orquestador principal (punto de entrada)
-├── config.py        ← Parámetros de búsqueda y credenciales
-├── scraper.py       ← Extracción web (requests + BeautifulSoup + Playwright)
-├── filtro.py        ← Filtros y scoring
-├── database.py      ← SQLite para deduplicación e historial
-├── notificador.py   ← Bot Telegram
-├── uf_helper.py     ← Valor UF actualizado desde mindicador.cl
-└── requirements.txt ← Dependencias Python
+├── main.py                 ← Orquestador principal (punto de entrada)
+├── config.py               ← Parámetros de búsqueda y credenciales
+├── scraper.py              ← Extracción web (requests + curl_cffi/Playwright opcionales)
+├── filtro.py               ← Filtros y scoring
+├── database.py             ← SQLite para deduplicación e historial
+├── notificador.py          ← Bot Telegram
+├── uf_helper.py            ← Valor UF actualizado desde mindicador.cl
+├── run_monitor.sh          ← Ejecuta un ciclo con .env y TZ de Chile
+├── setup_termux.sh         ← Instalación y cron en Termux
+├── README_ANDROID.md       ← Guía paso a paso para Android TV Box
+├── requirements.txt        ← Dependencias para macOS/Linux/Actions
+└── requirements-termux.txt ← Dependencias mínimas para Termux
 ```
 
 ## Comandos principales
 
-### Instalación inicial
+### Instalación en Termux (Android TV Box)
+```bash
+pkg update && pkg upgrade -y
+pkg install -y git
+git clone https://github.com/mruanov/depto-monitor.git
+cd depto-monitor
+bash setup_termux.sh
+```
+Ver `README_ANDROID.md` para el detalle.
+
+### Instalación local (macOS/Linux)
 ```bash
 cd /Users/mruanov/Documents/Deptos
 pip install -r requirements.txt
-playwright install chromium
+playwright install chromium   # opcional, solo fallback
 ```
 
 ### Verificar conexión Telegram
 ```bash
-python main.py --verify
+./run_monitor.sh --verify
 ```
 
 ### Ejecución de prueba (sin notificaciones ni escritura en DB)
 ```bash
-python main.py --test
+./run_monitor.sh --test
 ```
 
 ### Ejecución real
 ```bash
-python main.py
+./run_monitor.sh
 ```
 
 ## Configuración de Telegram
-Para GitHub Actions, configura estos secretos en `Settings > Secrets and variables > Actions`:
-`TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID`.
-
-Para ejecutar localmente, exporta las variables de entorno en la terminal:
+En Termux, `setup_termux.sh` crea `.env` con:
 ```bash
-export TELEGRAM_BOT_TOKEN="..."   # token de @BotFather
-export TELEGRAM_CHAT_ID="..."     # ID del chat
+TELEGRAM_BOT_TOKEN="..."   # token de @BotFather
+TELEGRAM_CHAT_ID="..."     # ID del chat
 ```
-No guardes credenciales en `config.py` ni en el repositorio.
+`run_monitor.sh` carga ese archivo y las variables de entorno. No guardes
+credenciales en `config.py` ni en el repositorio.
 
-Si el portal redirige a una verificación de cuenta o bloquea el acceso, el workflow
-fallará y enviará una alerta a Telegram con el enlace a sus logs. El monitor no
-intenta saltarse esa verificación; para reanudar la búsqueda se necesita un método
-de acceso permitido por el portal.
-
-## Cron (cada 4 horas)
+## Cron en Termux (cada 4 horas)
 ```cron
-0 */4 * * * cd /Users/mruanov/Documents/Deptos && /usr/bin/python3 main.py >> agente_deptos.log 2>&1
+0 */4 * * * /data/data/com.termux/files/home/depto-monitor/run_monitor.sh >> /data/data/com.termux/files/home/depto-monitor/monitor-cron.log 2>&1
 ```
+Mantén `termux-wake-lock`, `sv up crond` y la batería de Termux sin restricciones.
+Usa `sv status crond` para comprobar el servicio.
 
 ## Parámetros calibrados (actuales)
 - Precio máximo total (arriendo + GC): $470.000 CLP
