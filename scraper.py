@@ -22,6 +22,13 @@ from urllib.parse import urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
+try:
+    from curl_cffi import requests as curl_requests
+    from curl_cffi.requests.errors import RequestsError as CurlRequestsError
+except ImportError:  # pragma: no cover - curl_cffi se instala vía requirements.txt
+    curl_requests = None
+    CurlRequestsError = None
+
 from config import (
     COMUNAS, COMUNA_SLUGS, BASE_URL_TEMPLATE,
     ITEMS_PER_PAGE, MAX_PAGINAS,
@@ -67,12 +74,54 @@ class ScrapePartialError(ScrapeUnavailableError):
 # UTILIDADES
 # ─────────────────────────────────────────────────────────
 
+_REAL_CHROME_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
+)
+_IMPERSONATE_TARGETS = ("chrome", "safari", "chrome124")
+_REQUEST_EXCEPTIONS = (requests.RequestException,)
+if CurlRequestsError is not None:
+    _REQUEST_EXCEPTIONS += (CurlRequestsError,)
+
+
 def _get_headers() -> dict:
     return {
-        "User-Agent": "DeptoMonitor/1.0 (+https://github.com/mruanov/depto-monitor)",
-        "Accept-Language": "es-CL,es;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "User-Agent": _REAL_CHROME_UA,
+        "Accept-Language": "es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": (
+            "text/html,application/xhtml+xml,application/xml;q=0.9,"
+            "image/avif,image/webp,image/apng,*/*;q=0.8"
+        ),
+        "Sec-Ch-Ua": '"Chromium";v="136", "Not(A:Brand";v="24", "Google Chrome";v="136"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1",
     }
+
+
+def _impersonate_target(attempt: int) -> str:
+    return _IMPERSONATE_TARGETS[(attempt - 1) % len(_IMPERSONATE_TARGETS)]
+
+
+def _es_verificacion_cuenta(final_url: str) -> bool:
+    return "/gz/account-verification" in final_url.lower()
+
+
+def _http_get(url: str, attempt: int = 1):
+    """GET con huella TLS de navegador real cuando curl_cffi está disponible."""
+    if curl_requests is not None:
+        return curl_requests.get(
+            url,
+            headers={"Accept-Language": "es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7"},
+            impersonate=_impersonate_target(attempt),
+            timeout=REQUEST_TIMEOUT,
+            allow_redirects=True,
+        )
+    return requests.get(url, headers=_get_headers(), timeout=REQUEST_TIMEOUT)
 
 
 def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
@@ -82,7 +131,7 @@ def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
     error_html = None
     for attempt in range(1, retries + 1):
         try:
-            resp = requests.get(url, headers=_get_headers(), timeout=REQUEST_TIMEOUT)
+            resp = _http_get(url, attempt)
             status_code = resp.status_code
             final_url = resp.url
             if final_url != url:
@@ -91,18 +140,25 @@ def _fetch_html(url: str, retries: int = 3) -> _FetchResult:
                     "El portal normalizó/redirigió la URL (HTTP %s): %s -> %s",
                     status_code, _url_sin_query(url), _url_sin_query(final_url),
                 )
-            if resp.status_code == 200:
+            if status_code == 200 and not _es_verificacion_cuenta(final_url):
                 return _FetchResult(resp.text, status_code, final_url)
-            if status_code == 404:
-                error_html = resp.text
+            if status_code == 200:
+                logger.warning(
+                    "El portal pidió verificación de cuenta; se reintentará con otro "
+                    "perfil TLS (%s, intento %d/%d).",
+                    _impersonate_target(attempt), attempt, retries,
+                )
+            else:
+                if status_code == 404:
+                    error_html = resp.text
 
-            log = logger.info if status_code == 404 else logger.warning
-            log("HTTP %s para %s (intento %d/%d)", status_code, url, attempt, retries)
-            if status_code in (401, 403, 404, 429):
-                break
-            if status_code < 500:
-                break
-        except requests.RequestException as exc:
+                log = logger.info if status_code == 404 else logger.warning
+                log("HTTP %s para %s (intento %d/%d)", status_code, url, attempt, retries)
+                if status_code in (401, 403, 404, 429):
+                    break
+                if status_code < 500:
+                    break
+        except _REQUEST_EXCEPTIONS as exc:
             logger.warning("Error de red (%d/%d): %s", attempt, retries, exc)
         if attempt < retries:
             sleep = random.uniform(1, 3)
@@ -119,11 +175,23 @@ def _fetch_html_playwright(url: str) -> _FetchResult:
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
             try:
                 context = browser.new_context(
                     locale="es-CL",
                     timezone_id="America/Santiago",
+                    user_agent=_REAL_CHROME_UA,
+                    viewport={"width": 1366, "height": 768},
+                    extra_http_headers={
+                        "Accept-Language": "es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7"
+                    },
+                )
+                context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', "
+                    "{get: () => undefined});"
                 )
                 page = context.new_page()
                 response = page.goto(url, timeout=REQUEST_TIMEOUT * 1000)
@@ -448,7 +516,7 @@ def scrapear_comuna(comuna: str) -> List[dict]:
             raise ScrapeAccessError(
                 f"Portal rechazó la búsqueda de {comuna} con HTTP {resultado.status_code}."
             )
-        if "/gz/account-verification" in resultado.final_url.lower():
+        if _es_verificacion_cuenta(resultado.final_url):
             raise ScrapeAccessError(
                 f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
             )
@@ -461,7 +529,7 @@ def scrapear_comuna(comuna: str) -> List[dict]:
                 raise ScrapeAccessError(
                     f"Portal rechazó la búsqueda de {comuna} con HTTP {resultado.status_code}."
                 )
-            if "/gz/account-verification" in resultado.final_url.lower():
+            if _es_verificacion_cuenta(resultado.final_url):
                 raise ScrapeAccessError(
                     f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
                 )
@@ -520,7 +588,7 @@ def scrapear_comuna(comuna: str) -> List[dict]:
                 raise ScrapeAccessError(
                     f"Portal devolvió una pantalla de bloqueo/CAPTCHA para {comuna}."
                 )
-            elif "/gz/account-verification" in resultado.final_url.lower():
+            elif _es_verificacion_cuenta(resultado.final_url):
                 logger.warning(
                     "[%s] El portal redirigió a verificación de cuenta y no devolvió tarjetas; "
                     "la búsqueda está bloqueada para este request. URL final=%s",

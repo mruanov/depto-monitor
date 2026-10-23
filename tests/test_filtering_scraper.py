@@ -281,13 +281,37 @@ class ScraperTests(unittest.TestCase):
 
     def test_rate_limit_response_is_not_retried(self):
         response = Mock(status_code=429, url="https://example.test/search", text="")
-        with patch.object(scraper.requests, "get", return_value=response) as get:
+        with patch.object(scraper, "_http_get", return_value=response) as get:
             with patch.object(scraper.time, "sleep") as sleep:
                 result = scraper._fetch_html("https://example.test/search")
 
         self.assertEqual(result.status_code, 429)
         get.assert_called_once()
         sleep.assert_not_called()
+
+    def test_account_verification_response_is_retried_with_another_profile(self):
+        verification = Mock(
+            status_code=200,
+            url="https://www.portalinmobiliario.com/gz/account-verification",
+            text="",
+        )
+        success = Mock(
+            status_code=200,
+            url="https://example.test/search",
+            text="<html></html>",
+        )
+        with patch.object(
+            scraper, "_http_get", side_effect=[verification, success]
+        ) as get:
+            with patch.object(scraper.time, "sleep"):
+                result = scraper._fetch_html("https://example.test/search")
+
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.html, "<html></html>")
+        self.assertEqual(get.call_count, 2)
+        self.assertNotEqual(
+            get.call_args_list[0].args[1], get.call_args_list[1].args[1]
+        )
 
     def test_partial_commune_failures_keep_successful_publications(self):
         publication = {"id": "MLC-123"}
