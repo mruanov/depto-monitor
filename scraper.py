@@ -16,11 +16,12 @@ import re
 import time
 import random
 import logging
+import importlib.util
 import requests
 from typing import NamedTuple, Optional, Tuple, List
 from urllib.parse import urlsplit, urlunsplit
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 
 try:
     from curl_cffi import requests as curl_requests
@@ -43,6 +44,18 @@ logger = logging.getLogger(__name__)
 def _url_sin_query(url: str) -> str:
     partes = urlsplit(url)
     return urlunsplit((partes.scheme, partes.netloc, partes.path, "", ""))
+
+
+def _crear_soup(html: str) -> BeautifulSoup:
+    """Usa lxml si está instalado; en Termux cae a html.parser."""
+    try:
+        return BeautifulSoup(html, "lxml")
+    except FeatureNotFound:
+        return BeautifulSoup(html, "html.parser")
+
+
+def _playwright_disponible() -> bool:
+    return importlib.util.find_spec("playwright") is not None
 
 
 class _FetchResult(NamedTuple):
@@ -314,7 +327,7 @@ def _construir_url_busqueda(slug: str, pagina: int) -> str:
 
 
 def _es_pagina_sin_resultados(html: str) -> bool:
-    soup = BeautifulSoup(html, "lxml")
+    soup = _crear_soup(html)
     return (
         soup.select_one(".ui-search-rescue--zrp") is not None
         or "no hay inmuebles que coincidan con tu búsqueda"
@@ -461,7 +474,7 @@ def _obtener_detalle_publicacion(
     if not html:
         return None, None
 
-    soup = BeautifulSoup(html, "lxml")
+    soup = _crear_soup(html)
     descripcion = None
     desc_tag = soup.select_one(
         ".ui-pdp-description__content, p[class*='description'], "
@@ -522,17 +535,22 @@ def scrapear_comuna(comuna: str) -> List[dict]:
             )
 
         if not html and resultado.status_code not in (401, 403, 404, 429):
-            logger.warning("Fallback a Playwright para: %s", url)
-            resultado = _fetch_html_playwright(url)
-            html = resultado.html
-            if resultado.status_code in (401, 403, 429):
-                raise ScrapeAccessError(
-                    f"Portal rechazó la búsqueda de {comuna} con HTTP {resultado.status_code}."
+            if not _playwright_disponible():
+                logger.warning(
+                    "Playwright no está instalado; se omite el fallback para: %s", url
                 )
-            if _es_verificacion_cuenta(resultado.final_url):
-                raise ScrapeAccessError(
-                    f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
-                )
+            else:
+                logger.warning("Fallback a Playwright para: %s", url)
+                resultado = _fetch_html_playwright(url)
+                html = resultado.html
+                if resultado.status_code in (401, 403, 429):
+                    raise ScrapeAccessError(
+                        f"Portal rechazó la búsqueda de {comuna} con HTTP {resultado.status_code}."
+                    )
+                if _es_verificacion_cuenta(resultado.final_url):
+                    raise ScrapeAccessError(
+                        f"Portal redirigió la búsqueda de {comuna} a verificación de cuenta."
+                    )
         elif not html:
             logger.warning(
                 "No se usará Playwright tras HTTP %s para evitar repetir una solicitud bloqueada: %s",
@@ -545,7 +563,7 @@ def scrapear_comuna(comuna: str) -> List[dict]:
                 f"No se obtuvo HTML para la búsqueda de {comuna}."
             )
 
-        soup = BeautifulSoup(html, "lxml")
+        soup = _crear_soup(html)
 
         cards = soup.select("li.ui-search-layout__item")
         if not cards:
