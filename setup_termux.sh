@@ -80,10 +80,11 @@ sv up crond >/dev/null 2>&1 || true
 
 echo "==> Configurando arranque automático (requiere Termux:Boot)..."
 mkdir -p "$HOME/.termux/boot"
-cat > "$HOME/.termux/boot/start-depto-monitor.sh" <<'BOOT'
+cat > "$HOME/.termux/boot/start-depto-monitor.sh" <<BOOT
 #!/data/data/com.termux/files/usr/bin/sh
 termux-wake-lock >/dev/null 2>&1 || true
 sv up crond >/dev/null 2>&1 || true
+"$DEST/run_monitor.sh" --bot >> "$DEST/telegram-bot.log" 2>&1 &
 BOOT
 chmod +x "$HOME/.termux/boot/start-depto-monitor.sh"
 
@@ -99,6 +100,9 @@ cat <<EOF
    cd $DEST && ./run_monitor.sh --test
    cd $DEST && ./run_monitor.sh --verify
    cd $DEST && ./run_monitor.sh
+   cd $DEST && ./run_monitor.sh --bot
+
+ El chat de Telegram se inicia automáticamente con Termux:Boot.
 
  Revisa el log con:
    tail -f $CRON_LOG

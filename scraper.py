@@ -37,6 +37,7 @@ from config import (
     SECTORES_EXCLUIDOS_PROVIDENCIA, MAX_PRECIO_TOTAL_CLP
 )
 from uf_helper import obtener_valor_uf
+from runtime_settings import obtener_comunas, obtener_precio_maximo
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +320,7 @@ def _contiene_comuna(texto: str, comuna: str) -> bool:
 def _construir_url_busqueda(slug: str, pagina: int) -> str:
     url = BASE_URL_TEMPLATE.format(
         comuna=slug,
-        max_precio=MAX_PRECIO_TOTAL_CLP,
+        max_precio=obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP),
     )
     if pagina > 0:
         url += f"_Desde_{pagina * ITEMS_PER_PAGE + 1}"
@@ -400,11 +401,12 @@ def _parsear_tarjeta(card, comuna: str, uf_valor: float) -> Optional[dict]:
         if precio_uf is None and precio_clp is None and precio_txt:
             precio_uf, precio_clp = _parse_precio(precio_txt, uf_valor)
 
-        if precio_clp is not None and precio_clp > MAX_PRECIO_TOTAL_CLP:
+        maximo = obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
+        if precio_clp is not None and precio_clp > maximo:
             logger.debug("Descartado por precio superior al máximo: %s / $%s", titulo, f"{precio_clp:,}")
             return None
 
-        if precio_uf is not None and precio_uf > MAX_PRECIO_TOTAL_CLP / max(uf_valor, 1):
+        if precio_uf is not None and precio_uf > maximo / max(uf_valor, 1):
             logger.debug("Descartado por UF superior al máximo: %s / %.0f UF", titulo, precio_uf)
             return None
 
@@ -656,7 +658,8 @@ def scrapear_comuna(comuna: str) -> List[dict]:
 def scrapear_todas_las_comunas() -> List[dict]:
     todas = []
     errores = []
-    for comuna in COMUNAS:
+    comunas = obtener_comunas(COMUNAS)
+    for comuna in comunas:
         try:
             avisos = scrapear_comuna(comuna)
         except ScrapeAccessError:
@@ -678,7 +681,7 @@ def scrapear_todas_las_comunas() -> List[dict]:
         todas.extend(avisos)
         time.sleep(DELAY_ENTRE_PAGES * 2)
 
-    if errores and len(errores) == len(COMUNAS):
+    if errores and len(errores) == len(comunas):
         raise errores[0]
     if errores:
         raise ScrapePartialError(todas, errores)

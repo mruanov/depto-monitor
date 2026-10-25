@@ -48,7 +48,8 @@ El script:
 3. Pide el token y chat ID de Telegram y los guarda en `.env` (permisos `600`).
 4. Verifica la conexión con Telegram.
 5. Programa el ciclo cada 4 horas en `crontab`.
-6. Habilita `crond`, el wake-lock y el arranque con Termux:Boot.
+6. Habilita `crond`, el wake-lock y el arranque con Termux:Boot. El script de
+   inicio también lanza el chat interactivo de Telegram.
 
 ## Verificación manual
 
@@ -63,13 +64,38 @@ cd ~/depto-monitor
 
 # Ciclo real
 ./run_monitor.sh
+
+# Chat interactivo (normalmente se inicia automáticamente con Termux:Boot)
+./run_monitor.sh --bot
 ```
+
+El bot escucha mensajes del `TELEGRAM_CHAT_ID` configurado. Incluye:
+
+- `/status`, `/resumen`, `/resumen baratos` y `/force_run`.
+- `/score [id]` para explicar puntos y penalizaciones de un aviso; sin ID
+  analiza el score más bajo.
+- `/mercado` para mostrar conteos, rangos de precio y CLP/m² promedio por comuna.
+- `/parametros`, `/precio <CLP>`, `/comunas <lista>` y
+  `/reset_parametros` para consultar y cambiar filtros desde el chat.
+
+Los cambios de precio máximo y comunas quedan guardados en `deptos.db` y se
+mantienen hasta `/reset_parametros`; también los usa el cron. El bot alerta
+cuando detecta bajadas de precio y cuando el scraper queda vacío, bloqueado o
+falla. Las consultas usan SQLite y las librerías existentes, sin servicios de
+IA ni dependencias adicionales. Mantén una sola instancia de `--bot`.
 
 El log del cron queda en `~/depto-monitor/monitor-cron.log`:
 
 ```bash
 tail -f ~/depto-monitor/monitor-cron.log
 ```
+
+Cada ejecución de `run_monitor.sh` actualiza el checkout con
+`git pull --ff-only origin main` antes de iniciar Python. Por eso los ciclos de
+cron y los inicios del bot toman automáticamente la última versión publicada
+en `main`. La TV Box debe tener conectividad con GitHub y no mantener cambios
+locales en archivos versionados; conserva sus credenciales en el `.env`
+ignorado por Git.
 
 ## Configuración del cron
 
@@ -109,6 +135,7 @@ sv up crond
    ```bash
    termux-wake-lock
    sv up crond
+   cd ~/depto-monitor && ./run_monitor.sh --bot
    ```
 
 ## Dependencias en Termux
@@ -129,7 +156,11 @@ cd ~/depto-monitor
 git pull --ff-only
 ./.venv/bin/pip install -r requirements-termux.txt
 ./run_monitor.sh --test
+bash setup_termux.sh
 ```
+
+Vuelve a ejecutar `setup_termux.sh` para actualizar el script de Termux:Boot
+que inicia el bot automáticamente.
 
 ## Problemas frecuentes
 

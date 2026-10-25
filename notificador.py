@@ -140,6 +140,38 @@ def _enviar_mensaje(texto: str) -> bool:
         return False
 
 
+def obtener_actualizaciones(offset: Optional[int] = None, timeout: int = 25) -> list:
+    """Obtiene actualizaciones entrantes con long polling de Telegram."""
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("Falta TELEGRAM_BOT_TOKEN.")
+
+    parametros = {"timeout": timeout, "allowed_updates": ["message"]}
+    if offset is not None:
+        parametros["offset"] = offset
+
+    try:
+        resp = requests.get(
+            f"{TELEGRAM_API}/getUpdates",
+            params=parametros,
+            timeout=timeout + 10,
+        )
+        resp.raise_for_status()
+        respuesta = resp.json()
+    except requests.RequestException as exc:
+        raise RuntimeError(_error_sin_credenciales(exc)) from exc
+    except ValueError as exc:
+        raise RuntimeError("Telegram devolvió una respuesta JSON inválida.") from exc
+
+    if (
+        not isinstance(respuesta, dict)
+        or not respuesta.get("ok")
+        or not isinstance(respuesta.get("result"), list)
+        or any(not isinstance(actualizacion, dict) for actualizacion in respuesta["result"])
+    ):
+        raise RuntimeError("Telegram rechazó la solicitud de actualizaciones.")
+    return respuesta["result"]
+
+
 def _enviar_foto_con_caption(imagen_url: str, caption: str) -> bool:
     """Envía una imagen limpia con caption de texto plano."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -189,6 +221,36 @@ def notificar_publicacion(pub: dict) -> bool:
         return _enviar_mensaje(mensaje)
     else:
         return _enviar_mensaje(mensaje)
+
+
+def notificar_bajada_precio(pub: dict, anterior: int, nuevo: int) -> bool:
+    """Envía una alerta especial cuando baja el precio total de un aviso."""
+    titulo = html.escape(pub.get("titulo") or "Departamento")
+    comuna = html.escape(pub.get("comuna") or "Comuna no indicada")
+    url = _limpiar_url(pub.get("url"))
+    enlace = (
+        f'\n<a href="{html.escape(url, quote=True)}">Ver publicación</a>'
+        if url else ""
+    )
+    diferencia = anterior - nuevo
+    mensaje = (
+        f"📉 <b>¡Bajada de precio!</b>\n{titulo}\n{comuna}\n"
+        f"Antes: <s>{_formato_clp(anterior)}</s>\n"
+        f"Ahora: <b>{_formato_clp(nuevo)}</b> "
+        f"(bajó {_formato_clp(diferencia)}){enlace}"
+    )
+    return _enviar_mensaje(mensaje)
+
+
+def notificar_alerta_scraper(estado: str, detalle: str) -> bool:
+    """Avisa sobre ciclos vacíos, bloqueos o fallos del scraper."""
+    mensaje = (
+        "⚠️ <b>Alerta del monitor</b>\n"
+        f"Estado del ciclo: <code>{html.escape(estado)}</code>\n"
+        f"{html.escape(detalle)}\n"
+        "Puede deberse a un bloqueo temporal o a un cambio en la página."
+    )
+    return _enviar_mensaje(mensaje)
 
 
 def verificar_conexion_telegram() -> bool:

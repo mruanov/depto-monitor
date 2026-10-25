@@ -17,6 +17,7 @@ from config import (
     TIPOS_PROPIEDAD_NO_VALIDOS,
 )
 from uf_helper import obtener_valor_uf
+from runtime_settings import obtener_comunas, obtener_precio_maximo
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _precio_posterior_excede_limite(
                 valor_uf = float(re.search(r"\d[\d.,]*", texto_monto).group().replace(",", "."))
                 valor_clp = int(valor_uf * obtener_valor_uf())
 
-            if valor_clp + gastos_comunes > MAX_PRECIO_TOTAL_CLP:
+            if valor_clp + gastos_comunes > obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP):
                 return True
 
     return False
@@ -173,7 +174,11 @@ def filtrar_ubicacion(pub: dict) -> bool:
     """
     comuna_publicacion = str(pub.get("comuna", ""))
     comuna_objetivo = next(
-        (comuna for comuna in COMUNAS if _contiene_comuna(comuna_publicacion, comuna)),
+        (
+            comuna
+            for comuna in obtener_comunas(COMUNAS)
+            if _contiene_comuna(comuna_publicacion, comuna)
+        ),
         None,
     )
     texto_direccion = " ".join([
@@ -238,15 +243,18 @@ def filtrar_publicacion(pub: dict) -> bool:
         logger.debug("Sin precio: %s", pub.get("id"))
         return False
 
-    precio_total = calcular_precio_total(pub)
+    precio_total = pub.get("precio_total")
+    if precio_total is None:
+        precio_total = calcular_precio_total(pub)
     if precio_total is None:
         return False
 
     # Supera el límite total CLP (arriendo + GC)
-    if precio_total > MAX_PRECIO_TOTAL_CLP:
+    maximo = obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
+    if precio_total > maximo:
         logger.debug(
             "Precio total $%d > límite $%d: %s",
-            precio_total, MAX_PRECIO_TOTAL_CLP, pub.get("id")
+            precio_total, maximo, pub.get("id")
         )
         return False
 
@@ -261,49 +269,74 @@ def calcular_score(pub: dict) -> float:
     """
     Calcula un score de relevancia (0-100) para ordenar los mejores deptos.
     """
+    return detallar_score(pub)["score"]
+
+
+def detallar_score(pub: dict) -> dict:
+    """Devuelve puntuación y desglose explicable de cada regla de score."""
     score = 0.0
-    precio_total = calcular_precio_total(pub)
+    precio_total = pub.get("precio_total")
+    if precio_total is None:
+        precio_total = calcular_precio_total(pub)
+    reglas = []
+
+    def agregar(etiqueta: str, puntos: int) -> None:
+        nonlocal score
+        score += puntos
+        reglas.append({"regla": etiqueta, "puntos": puntos})
 
     # Premio por precio bajo (mientras más barato, más puntos)
     if precio_total:
-        ratio = precio_total / MAX_PRECIO_TOTAL_CLP
+        ratio = precio_total / obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
         if ratio <= 0.70:
-            score += 35
+            agregar("Precio total hasta el 70% del máximo", 35)
         elif ratio <= 0.80:
-            score += 25
+            agregar("Precio total hasta el 80% del máximo", 25)
         elif ratio <= 0.90:
-            score += 15
+            agregar("Precio total hasta el 90% del máximo", 15)
+        else:
+            agregar("Precio total sobre el 90% del máximo", 0)
+    else:
+        agregar("Precio total no informado", 0)
 
     # Premio por tener GC explícito (mayor confianza en precio total)
     if pub.get("gc_clp"):
-        score += 20
+        agregar("Gastos comunes conocidos", 20)
     else:
-        score -= 15
+        agregar("Gastos comunes no informados", -15)
 
     # Penalización por información incompleta de superficie.
     if not pub.get("superficie"):
-        score -= 10
+        agregar("Superficie no informada", -10)
 
     # Premio por superficie
     if pub.get("superficie"):
-        score += 15
+        agregar("Superficie informada", 15)
         sup = pub["superficie"]
         if sup >= 60:
-            score += 10
+            agregar("Superficie de al menos 60 m²", 10)
         elif sup >= 45:
-            score += 5
+            agregar("Superficie de al menos 45 m²", 5)
+        else:
+            agregar("Superficie menor a 45 m² (sin bono adicional)", 0)
 
     # Premio por dormitorios y baños conocidos
     if pub.get("dormitorios") is not None:
-        score += 5
+        agregar("Dormitorios informados", 5)
+    else:
+        agregar("Dormitorios no informados", 0)
     if pub.get("banos") is not None:
-        score += 5
+        agregar("Baños informados", 5)
+    else:
+        agregar("Baños no informados", 0)
 
     # Premio por imagen
     if pub.get("imagen_url"):
-        score += 10
+        agregar("Imagen disponible", 10)
+    else:
+        agregar("Imagen no disponible", 0)
 
-    return max(0.0, min(score, 100.0))
+    return {"score": max(0.0, min(score, 100.0)), "reglas": reglas}
 
 
 # ─────────────────────────────────────────────────────────

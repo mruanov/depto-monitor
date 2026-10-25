@@ -4,6 +4,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+git pull --ff-only origin main
+
 export TZ="${TZ:-America/Santiago}"
 
 if [ -f .env ]; then
