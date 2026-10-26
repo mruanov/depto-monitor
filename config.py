@@ -14,8 +14,15 @@ Las credenciales Telegram se leen desde variables de entorno
 # Precio máximo TOTAL (arriendo + GC) en pesos chilenos
 MAX_PRECIO_TOTAL_CLP = 470_000
 
-# Comunas a monitorear
-COMUNAS = ["Las Condes", "Vitacura", "Providencia", "Lo Barnechea"]
+# Comunas y sectores de búsqueda. Ciudad Empresarial es un sector de Huechuraba,
+# no implica monitorear el resto de esa comuna.
+COMUNAS = [
+    "Las Condes",
+    "Vitacura",
+    "Providencia",
+    "Lo Barnechea",
+    "Ciudad Empresarial",
+]
 
 # Sectores a EXCLUIR dentro de Providencia (palabras clave en dirección/título)
 # Si aparece cualquiera de estas palabras en la dirección, se descarta el aviso.
@@ -103,9 +110,10 @@ COMUNA_SLUGS = {
     "Vitacura":    "vitacura-metropolitana",
     "Providencia": "providencia-metropolitana",
     "Lo Barnechea": "lo-barnechea-metropolitana",
+    "Ciudad Empresarial": "ciudad-empresarial-huechuraba-metropolitana",
 }
 
-# Búsqueda por comuna, limitada por precio de arriendo y ordenada por fecha.
+# Búsqueda por comuna o sector, limitada por precio de arriendo y ordenada por fecha.
 BASE_URL_TEMPLATE = (
     "https://www.portalinmobiliario.com/arriendo/departamento/{comuna}/"
     "_PriceRange_0-{max_precio}_NoIndex_True_O_DateCreatedDESC"

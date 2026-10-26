@@ -78,6 +78,10 @@ El bot escucha mensajes del `TELEGRAM_CHAT_ID` configurado. Incluye:
 - `/parametros`, `/precio <CLP>`, `/comunas <lista>` y
   `/reset_parametros` para consultar y cambiar filtros desde el chat.
 
+La búsqueda incluye ahora Ciudad Empresarial como sector específico de
+Huechuraba; no incorpora el resto de la comuna. También puedes incluirlo o
+quitarlo en la lista dinámica con `/comunas`.
+
 Los cambios de precio máximo y comunas quedan guardados en `deptos.db` y se
 mantienen hasta `/reset_parametros`; también los usa el cron. El bot alerta
 cuando detecta bajadas de precio y cuando el scraper queda vacío, bloqueado o

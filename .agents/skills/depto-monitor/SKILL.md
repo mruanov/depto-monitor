@@ -87,6 +87,7 @@ Usa `sv status crond` para comprobar el servicio.
 ## Parámetros calibrados (actuales)
 - Precio máximo total (arriendo + GC): $470.000 CLP
 - Comunas: Las Condes, Vitacura, Providencia, Lo Barnechea
+- Sector adicional: Ciudad Empresarial (sin incluir el resto de Huechuraba)
 - Excluidos en Providencia: Bellavista, Plaza Italia, Barrio Italia, Salvador, Baquedano, Vicuña Mackenna
 - Dormitorios: sin filtro
 - Superficie: sin filtro
@@ -100,7 +101,10 @@ MAX_PRECIO_TOTAL_CLP = 470_000  # ← cambiar este valor
 
 Para agregar o quitar comunas:
 ```python
-COMUNAS = ["Las Condes", "Vitacura", "Providencia", "Lo Barnechea"]
+COMUNAS = [
+    "Las Condes", "Vitacura", "Providencia", "Lo Barnechea",
+    "Ciudad Empresarial",
+]
 ```
 
 Para agregar sectores excluidos en Providencia:

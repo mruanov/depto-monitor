@@ -182,6 +182,17 @@ class KeywordFilterTests(unittest.TestCase):
 
         self.assertEqual([pub["id"] for pub in resultado], ["MLC-123"])
 
+    def test_accepts_city_business_sector_but_not_other_huechuraba_areas(self):
+        publication = self.publication("Departamento en Ciudad Empresarial")
+        publication.update({
+            "comuna": "Ciudad Empresarial",
+            "ubicacion": "Ciudad Empresarial, Huechuraba",
+        })
+        self.assertTrue(filtro.filtrar_ubicacion(publication))
+
+        publication["ubicacion"] = "Pedro Fontova, Huechuraba"
+        self.assertFalse(filtro.filtrar_ubicacion(publication))
+
 
 class ScraperTests(unittest.TestCase):
     def test_search_url_uses_portal_canonical_filter_order(self):
@@ -193,6 +204,19 @@ class ScraperTests(unittest.TestCase):
             )
         )
         self.assertTrue(next_page.endswith("_Desde_49"))
+
+    def test_city_business_has_its_own_search_url(self):
+        slug = scraper.COMUNA_SLUGS["Ciudad Empresarial"]
+        url = scraper._construir_url_busqueda(slug, 0)
+        self.assertIn(
+            "/arriendo/departamento/ciudad-empresarial-huechuraba-metropolitana/",
+            url,
+        )
+        self.assertTrue(scraper._card_es_publicacion_valida(
+            scraper._crear_soup("<div>Departamento en arriendo</div>").div,
+            "Ciudad Empresarial",
+            "Ciudad Empresarial, Huechuraba",
+        ))
 
     def test_soup_falls_back_to_html_parser_without_lxml(self):
         real_soup = scraper.BeautifulSoup
