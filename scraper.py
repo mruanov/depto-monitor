@@ -34,7 +34,8 @@ from config import (
     COMUNAS, COMUNA_SLUGS, BASE_URL_TEMPLATE,
     ITEMS_PER_PAGE, MAX_PAGINAS,
     DELAY_ENTRE_PAGES, REQUEST_TIMEOUT,
-    SECTORES_EXCLUIDOS_PROVIDENCIA, MAX_PRECIO_TOTAL_CLP
+    SECTORES_EXCLUIDOS_PROVIDENCIA, MAX_PRECIO_TOTAL_CLP,
+    MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP,
 )
 from uf_helper import obtener_valor_uf
 from runtime_settings import obtener_comunas, obtener_precio_maximo
@@ -318,9 +319,13 @@ def _contiene_comuna(texto: str, comuna: str) -> bool:
 
 
 def _construir_url_busqueda(slug: str, pagina: int) -> str:
+    maximo_busqueda = max(
+        obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP),
+        MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP,
+    )
     url = BASE_URL_TEMPLATE.format(
         comuna=slug,
-        max_precio=obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP),
+        max_precio=maximo_busqueda,
     )
     if pagina > 0:
         url += f"_Desde_{pagina * ITEMS_PER_PAGE + 1}"
@@ -342,7 +347,14 @@ def _card_es_publicacion_valida(card, comuna: str, ubicacion: str) -> bool:
     if not texto:
         return False
 
-    if not _contiene_comuna(ubicacion, comuna):
+    # Ciudad Empresarial se busca con el slug de Huechuraba; el filtro final
+    # exige que el título o la descripción mencione explícitamente el sector.
+    comunas_validas = (
+        ("Ciudad Empresarial", "Huechuraba")
+        if comuna == "Ciudad Empresarial"
+        else (comuna,)
+    )
+    if not any(_contiene_comuna(ubicacion, objetivo) for objetivo in comunas_validas):
         return False
 
     if comuna == "Providencia":
@@ -401,7 +413,10 @@ def _parsear_tarjeta(card, comuna: str, uf_valor: float) -> Optional[dict]:
         if precio_uf is None and precio_clp is None and precio_txt:
             precio_uf, precio_clp = _parse_precio(precio_txt, uf_valor)
 
-        maximo = obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
+        maximo = max(
+            obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP),
+            MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP,
+        )
         if precio_clp is not None and precio_clp > maximo:
             logger.debug("Descartado por precio superior al máximo: %s / $%s", titulo, f"{precio_clp:,}")
             return None

@@ -82,6 +82,12 @@ La búsqueda incluye ahora Ciudad Empresarial como sector específico de
 Huechuraba; no incorpora el resto de la comuna. También puedes incluirlo o
 quitarlo en la lista dinámica con `/comunas`.
 
+El límite de precio total sigue siendo $470.000 CLP. Se aceptan avisos de hasta
+$490.000 CLP solo cuando el título o descripción confirma que estacionamiento
+y bodega están incluidos; si alguno es opcional, se cobra aparte o no queda
+claro, se mantiene el límite de $470.000. El scraper busca hasta $490.000 para
+poder evaluar esta excepción.
+
 Los cambios de precio máximo y comunas quedan guardados en `deptos.db` y se
 mantienen hasta `/reset_parametros`; también los usa el cron. El bot alerta
 cuando detecta bajadas de precio y cuando el scraper queda vacío, bloqueado o

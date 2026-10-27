@@ -86,6 +86,7 @@ Usa `sv status crond` para comprobar el servicio.
 
 ## Parámetros calibrados (actuales)
 - Precio máximo total (arriendo + GC): $470.000 CLP
+- Excepción: hasta $490.000 CLP si el aviso confirma estacionamiento y bodega incluidos
 - Comunas: Las Condes, Vitacura, Providencia, Lo Barnechea
 - Sector adicional: Ciudad Empresarial (sin incluir el resto de Huechuraba)
 - Excluidos en Providencia: Bellavista, Plaza Italia, Barrio Italia, Salvador, Baquedano, Vicuña Mackenna
@@ -98,6 +99,10 @@ Para cambiar el límite de precio, abrir `config.py` y editar:
 ```python
 MAX_PRECIO_TOTAL_CLP = 470_000  # ← cambiar este valor
 ```
+
+La excepción de hasta $490.000 solo aplica cuando el título o descripción
+confirma que estacionamiento y bodega están incluidos; referencias ambiguas o
+con cobro aparte no califican.
 
 Para agregar o quitar comunas:
 ```python

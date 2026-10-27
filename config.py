@@ -13,6 +13,9 @@ Las credenciales Telegram se leen desde variables de entorno
 
 # Precio máximo TOTAL (arriendo + GC) en pesos chilenos
 MAX_PRECIO_TOTAL_CLP = 470_000
+# Excepción superior, aplicable solo si el aviso confirma estacionamiento y
+# bodega incluidos sin cobro adicional.
+MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP = 490_000
 
 # Comunas y sectores de búsqueda. Ciudad Empresarial es un sector de Huechuraba,
 # no implica monitorear el resto de esa comuna.
@@ -110,7 +113,9 @@ COMUNA_SLUGS = {
     "Vitacura":    "vitacura-metropolitana",
     "Providencia": "providencia-metropolitana",
     "Lo Barnechea": "lo-barnechea-metropolitana",
-    "Ciudad Empresarial": "ciudad-empresarial-huechuraba-metropolitana",
+    # El portal no tiene un slug propio para el sector; se busca la comuna
+    # completa y el filtro exige mención explícita a Ciudad Empresarial.
+    "Ciudad Empresarial": "huechuraba-metropolitana",
 }
 
 # Búsqueda por comuna o sector, limitada por precio de arriendo y ordenada por fecha.

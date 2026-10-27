@@ -20,6 +20,7 @@ from config import (
     LOG_FILE,
     LOG_LEVEL,
     MAX_PRECIO_TOTAL_CLP,
+    MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,
 )
@@ -116,6 +117,10 @@ def ejecutar_ciclo(dry_run: bool = False) -> bool:
         logger.info("PASO 2: Preparando avisos nuevos y conocidos...")
         uf_actual = obtener_valor_uf()
         maximo = obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
+        maximo_busqueda = max(
+            maximo,
+            MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP,
+        )
         publicaciones_candidateables = []
         procesados_en_ciclo = set()
 
@@ -152,7 +157,7 @@ def ejecutar_ciclo(dry_run: bool = False) -> bool:
             if not precio_clp and precio_uf:
                 precio_clp = precio_uf * uf_actual
 
-            if precio_clp and precio_clp > maximo:
+            if precio_clp and precio_clp > maximo_busqueda:
                 continue
             publicaciones_candidateables.append(pub)
 
@@ -166,7 +171,14 @@ def ejecutar_ciclo(dry_run: bool = False) -> bool:
         logger.info("PASO 3: Enriqueciendo avisos nuevos...")
         publicaciones_enriquecidas = []
         for pub in publicaciones_candidateables:
-            if pub.get("_es_nueva") or pub.get("gc_clp") is None:
+            precio_clp = pub.get("precio_clp") or 0
+            precio_uf = pub.get("precio_uf") or 0
+            precio_base_clp = precio_clp or int(precio_uf * uf_actual)
+            if (
+                pub.get("_es_nueva")
+                or pub.get("gc_clp") is None
+                or precio_base_clp > maximo
+            ):
                 enriquecer_con_gc(pub)
             publicaciones_enriquecidas.append(pub)
 

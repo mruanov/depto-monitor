@@ -190,8 +190,86 @@ class KeywordFilterTests(unittest.TestCase):
         })
         self.assertTrue(filtro.filtrar_ubicacion(publication))
 
+        publication["titulo"] = "Departamento en Huechuraba"
         publication["ubicacion"] = "Pedro Fontova, Huechuraba"
         self.assertFalse(filtro.filtrar_ubicacion(publication))
+
+    def test_huechuraba_offer_requires_explicit_city_business_mention(self):
+        publication = self.publication("Departamento en arriendo")
+        publication.update({
+            "comuna": "Huechuraba",
+            "ubicacion": "Huechuraba, Región Metropolitana",
+        })
+        self.assertFalse(filtro.filtrar_ubicacion(publication))
+
+        publication["titulo"] = "Departamento en CIUDAD EMPRESARIAL"
+        self.assertTrue(filtro.filtrar_ubicacion(publication))
+
+    def test_huechuraba_offer_accepts_city_business_in_description(self):
+        publication = self.publication(
+            "Departamento en arriendo",
+            "A pasos de Ciudad Empresarial, ideal para profesionales.",
+        )
+        publication.update({
+            "comuna": "Huechuraba",
+            "ubicacion": "Huechuraba, Región Metropolitana",
+        })
+        self.assertTrue(filtro.filtrar_ubicacion(publication))
+
+    def test_exception_to_price_limit_requires_both_extras_explicitly_included(self):
+        cases = (
+            ("Departamento en arriendo", 470_000, True),
+            ("Departamento en arriendo", 470_001, False),
+            (
+                "Departamento incluye estacionamiento y bodega",
+                490_000,
+                True,
+            ),
+            (
+                "Departamento incluye estacionamiento y bodega",
+                490_001,
+                False,
+            ),
+            (
+                "Departamento incluye estacionamiento",
+                480_000,
+                False,
+            ),
+            (
+                "Departamento con estacionamiento y bodega disponibles por separado",
+                480_000,
+                False,
+            ),
+            (
+                "Departamento con estacionamiento incluido y bodega no incluida",
+                480_000,
+                False,
+            ),
+        )
+        for titulo, precio, esperado in cases:
+            with self.subTest(titulo=titulo, precio=precio):
+                publication = self.publication(titulo)
+                publication.update({
+                    "precio_clp": precio,
+                    "gc_clp": 0,
+                    "precio_total": precio,
+                })
+                self.assertEqual(filtro.filtrar_publicacion(publication), esperado)
+
+    def test_explicit_inclusion_can_be_confirmed_in_description(self):
+        publication = self.publication("Departamento en arriendo")
+        publication.update({
+            "precio_clp": 480_000,
+            "gc_clp": 0,
+            "precio_total": 480_000,
+            "descripcion": "Incluye estacionamiento y bodega sin costo adicional.",
+        })
+        self.assertTrue(filtro.filtrar_publicacion(publication))
+
+        publication["descripcion"] = (
+            "Incluye estacionamiento; bodega disponible con pago adicional."
+        )
+        self.assertFalse(filtro.filtrar_publicacion(publication))
 
 
 class ScraperTests(unittest.TestCase):
@@ -200,22 +278,34 @@ class ScraperTests(unittest.TestCase):
         next_page = scraper._construir_url_busqueda("lo-barnechea-metropolitana", 1)
         self.assertTrue(
             first_page.endswith(
-                "_PriceRange_0-470000_NoIndex_True_O_DateCreatedDESC"
+                "_PriceRange_0-490000_NoIndex_True_O_DateCreatedDESC"
             )
         )
         self.assertTrue(next_page.endswith("_Desde_49"))
 
-    def test_city_business_has_its_own_search_url(self):
+    def test_city_business_uses_huechuraba_commune_slug(self):
         slug = scraper.COMUNA_SLUGS["Ciudad Empresarial"]
+        self.assertEqual(slug, "huechuraba-metropolitana")
         url = scraper._construir_url_busqueda(slug, 0)
         self.assertIn(
-            "/arriendo/departamento/ciudad-empresarial-huechuraba-metropolitana/",
+            "/arriendo/departamento/huechuraba-metropolitana/",
             url,
         )
+        card = scraper._crear_soup("<div>Departamento en arriendo</div>").div
         self.assertTrue(scraper._card_es_publicacion_valida(
-            scraper._crear_soup("<div>Departamento en arriendo</div>").div,
+            card,
             "Ciudad Empresarial",
             "Ciudad Empresarial, Huechuraba",
+        ))
+        self.assertTrue(scraper._card_es_publicacion_valida(
+            card,
+            "Ciudad Empresarial",
+            "Los Libertadores, Huechuraba",
+        ))
+        self.assertFalse(scraper._card_es_publicacion_valida(
+            card,
+            "Ciudad Empresarial",
+            "Las Condes, Apoquindo",
         ))
 
     def test_soup_falls_back_to_html_parser_without_lxml(self):

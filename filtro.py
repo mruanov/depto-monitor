@@ -11,6 +11,7 @@ import unicodedata
 from typing import Optional, List
 from config import (
     MAX_PRECIO_TOTAL_CLP,
+    MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP,
     COMUNAS,
     SECTORES_EXCLUIDOS_PROVIDENCIA,
     PALABRAS_CLAVE_NO_VALIDAS,
@@ -39,6 +40,60 @@ def _contiene_termino(texto: str, termino: str) -> bool:
         rf"(?<![a-z0-9]){re.escape(termino)}(?![a-z0-9])",
         texto,
     ) is not None
+
+
+def _amenidad_incluida(texto: str, amenidad: str) -> bool:
+    """Requiere que la inclusión y la amenidad estén expresas en la misma frase."""
+    texto = _normalizar_texto(texto)
+    termino = r"estacionamientos?|parking" if amenidad == "estacionamiento" else r"bodegas?"
+    palabra_inclusion = re.compile(r"\binclu(?:ye|yen|ido|ida|idos|idas)\b")
+    negacion = re.compile(
+        r"\bno\s+(?:esta\s+)?incluid[oa]s?\b"
+        r"|\b(?:aparte|adicional(?:es)?|opcional(?:es)?|extra|"
+        r"disponible|se paga|se arrienda)\b"
+    )
+    separador = re.compile(r"[.!?;\n]")
+
+    for coincidencia in re.finditer(rf"\b(?:{termino})\b", texto):
+        inicio = coincidencia.start()
+        fin = coincidencia.end()
+        anterior = separador.search(texto[:inicio][::-1])
+        siguiente = separador.search(texto[fin:])
+        inicio_frase = inicio - anterior.start() + 1 if anterior else 0
+        fin_frase = fin + siguiente.start() if siguiente else len(texto)
+        frase = texto[inicio_frase:fin_frase]
+
+        contexto = frase[max(0, inicio - inicio_frase - 80):
+                         min(len(frase), fin - inicio_frase + 80)]
+        contexto_sin_costo = contexto.replace("sin costo adicional", "")
+        if negacion.search(contexto_sin_costo):
+            continue
+        if palabra_inclusion.search(contexto):
+            return True
+    return False
+
+
+def _tiene_estacionamiento_y_bodega_incluidos(pub: dict) -> bool:
+    texto = " ".join(
+        str(pub.get(campo) or "")
+        for campo in ("titulo", "descripcion", "descripcion_corta")
+    )
+    return (
+        _amenidad_incluida(texto, "estacionamiento")
+        and _amenidad_incluida(texto, "bodega")
+    )
+
+
+def _precio_pasa_limite(pub: dict, precio_total: Optional[int]) -> bool:
+    if precio_total is None:
+        return False
+    limite_base = obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
+    if precio_total <= limite_base:
+        return True
+    return (
+        precio_total <= MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP
+        and _tiene_estacionamiento_y_bodega_incluidos(pub)
+    )
 
 
 _PATRONES_PRECIO_POSTERIOR = (
@@ -84,7 +139,17 @@ def _precio_posterior_excede_limite(
                 valor_uf = float(re.search(r"\d[\d.,]*", texto_monto).group().replace(",", "."))
                 valor_clp = int(valor_uf * obtener_valor_uf())
 
-            if valor_clp + gastos_comunes > obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP):
+            total = valor_clp + gastos_comunes
+            if total > obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP):
+                maximo = MAX_PRECIO_CON_ESTACIONAMIENTO_Y_BODEGA_CLP
+                texto_aviso = texto_normalizado
+                cumple_excepcion = (
+                    total <= maximo
+                    and _amenidad_incluida(texto_aviso, "estacionamiento")
+                    and _amenidad_incluida(texto_aviso, "bodega")
+                )
+                if cumple_excepcion:
+                    continue
                 return True
 
     return False
@@ -173,6 +238,37 @@ def filtrar_ubicacion(pub: dict) -> bool:
     y que no caiga en los sectores excluidos de Providencia. Bloquea la publicidad externa.
     """
     comuna_publicacion = str(pub.get("comuna", ""))
+    titulo = str(pub.get("titulo", ""))
+    descripcion = " ".join([
+        str(pub.get("descripcion", "")),
+        str(pub.get("descripcion_corta", "")),
+    ])
+    texto_direccion = " ".join([
+        str(pub.get("ubicacion", "")),
+        str(pub.get("direccion", "")),
+    ]).lower()
+
+    # Ciudad Empresarial no tiene slug propio: se busca por Huechuraba y se
+    # exige que el aviso mencione explícitamente el sector.
+    texto_huechuraba = _normalizar_texto(f"{comuna_publicacion} {texto_direccion}")
+    proviene_de_huechuraba = (
+        _contiene_termino(texto_huechuraba, "huechuraba")
+        or _contiene_termino(
+            _normalizar_texto(comuna_publicacion), "ciudad empresarial"
+        )
+    )
+    menciona_ciudad_empresarial = _contiene_termino(
+        _normalizar_texto(f"{titulo} {descripcion}"), "ciudad empresarial"
+    )
+    if proviene_de_huechuraba and not menciona_ciudad_empresarial:
+        logger.debug(
+            "Descartado por aviso de Huechuraba sin mención explícita a "
+            "Ciudad Empresarial: %s",
+            pub.get("id"),
+        )
+        return False
+
+    es_ciudad_empresarial = proviene_de_huechuraba and menciona_ciudad_empresarial
     comuna_objetivo = next(
         (
             comuna
@@ -181,22 +277,21 @@ def filtrar_ubicacion(pub: dict) -> bool:
         ),
         None,
     )
-    texto_direccion = " ".join([
-        str(pub.get("ubicacion", "")),
-        str(pub.get("direccion", "")),
-    ]).lower()
+    if comuna_objetivo is None and es_ciudad_empresarial:
+        comuna_objetivo = "Ciudad Empresarial"
 
     # 1. Comprobar que pertenezca a una de las comunas permitidas
-    if comuna_objetivo is None or not _contiene_comuna(texto_direccion, comuna_objetivo):
+    if not (
+        es_ciudad_empresarial
+        or (
+            comuna_objetivo is not None
+            and _contiene_comuna(texto_direccion, comuna_objetivo)
+        )
+    ):
         logger.debug("Descartado por comuna no permitida o anuncio patrocinado: %s", pub.get("id"))
         return False
 
     # 2. Eliminar avisos claramente no residenciales o de publicidad masiva.
-    titulo = str(pub.get("titulo", ""))
-    descripcion = " ".join([
-        str(pub.get("descripcion", "")),
-        str(pub.get("descripcion_corta", "")),
-    ])
     if _precio_posterior_excede_limite(
         f"{titulo} {descripcion}", pub.get("gc_clp") or 0
     ):
@@ -251,10 +346,10 @@ def filtrar_publicacion(pub: dict) -> bool:
 
     # Supera el límite total CLP (arriendo + GC)
     maximo = obtener_precio_maximo(MAX_PRECIO_TOTAL_CLP)
-    if precio_total > maximo:
+    if not _precio_pasa_limite(pub, precio_total):
         logger.debug(
-            "Precio total $%d > límite $%d: %s",
-            precio_total, maximo, pub.get("id")
+            "Precio total $%d no cumple límites o excepción de extras: %s",
+            precio_total, pub.get("id")
         )
         return False
 
