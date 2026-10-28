@@ -3,7 +3,6 @@
 import html
 import logging
 import re
-import sqlite3
 import time
 import unicodedata
 from typing import Callable, Optional
@@ -311,7 +310,7 @@ def _ajustar_comunas(valor: Optional[str]) -> str:
 
 def _procesar_actualizacion(
     actualizacion: dict,
-    ejecutar_ciclo: Callable[[], bool],
+    ejecutar_ciclo: Callable[[], Optional[bool]],
 ) -> None:
     mensaje = actualizacion.get("message")
     if not isinstance(mensaje, dict):
@@ -326,9 +325,9 @@ def _procesar_actualizacion(
 
     try:
         respuesta = _responder(texto)
-    except sqlite3.Error:
+    except Exception:
         logger.exception("No se pudo responder una consulta de Telegram.")
-        _enviar_mensaje("No pude consultar la base de datos. Revisa el log del monitor.")
+        _enviar_mensaje("No pude procesar tu consulta. Revisa el log del monitor.")
         return
 
     if respuesta != "force_run":
@@ -336,10 +335,17 @@ def _procesar_actualizacion(
         return
 
     _enviar_mensaje("🔄 Iniciando un ciclo de búsqueda. Te aviso cuando termine.")
-    correcto = ejecutar_ciclo()
+    resultado = ejecutar_ciclo()
+    if resultado is None:
+        _enviar_mensaje(
+            "⏳ Ya hay un ciclo de búsqueda en ejecución. "
+            "Espera a que termine e inténtalo nuevamente."
+        )
+        return
+    correcto = bool(resultado)
     try:
         estado = obtener_estado_actual()["ultima_ejecucion"]
-    except sqlite3.Error:
+    except Exception:
         logger.exception("No se pudo leer el resultado del ciclo manual.")
         _enviar_mensaje("El ciclo terminó, pero no pude leer su resultado de la base.")
         return
@@ -353,12 +359,33 @@ def _procesar_actualizacion(
     )
 
 
-def iniciar_bot(ejecutar_ciclo: Callable[[], bool]) -> None:
+def _esperar_conexion_telegram(max_backoff: int = 300) -> None:
+    """Espera indefinidamente a que Telegram esté disponible, con backoff."""
+    espera = 5
+    intento = 1
+    while True:
+        if verificar_conexion_telegram():
+            return
+        logger.error(
+            "No se pudo verificar Telegram (intento %d); reintentando en %d s.",
+            intento,
+            espera,
+        )
+        time.sleep(espera)
+        espera = min(espera * 2, max_backoff)
+        intento += 1
+
+
+def iniciar_bot(ejecutar_ciclo: Callable[[], Optional[bool]]) -> None:
     """Escucha mensajes autorizados hasta que el proceso se interrumpa."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         raise RuntimeError("Faltan TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID.")
-    if not verificar_conexion_telegram():
-        raise RuntimeError("No se pudo verificar la conexión con Telegram.")
+
+    try:
+        _esperar_conexion_telegram()
+    except KeyboardInterrupt:
+        logger.info("Chat interactivo detenido antes de conectar.")
+        return
 
     logger.info("Chat interactivo iniciado para el chat configurado.")
     offset: Optional[int] = None
@@ -375,6 +402,15 @@ def iniciar_bot(ejecutar_ciclo: Callable[[], bool]) -> None:
                 update_id = actualizacion.get("update_id")
                 if isinstance(update_id, int):
                     offset = update_id + 1
-                _procesar_actualizacion(actualizacion, ejecutar_ciclo)
+                try:
+                    _procesar_actualizacion(actualizacion, ejecutar_ciclo)
+                except Exception:
+                    logger.exception(
+                        "Error inesperado procesando actualización %s.", update_id
+                    )
+                    _enviar_mensaje(
+                        "⚠️ Ocurrió un error procesando tu mensaje. "
+                        "Revisa el log del monitor."
+                    )
     except KeyboardInterrupt:
         logger.info("Chat interactivo detenido por el usuario.")

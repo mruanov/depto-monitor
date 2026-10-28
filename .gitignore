@@ -26,3 +26,7 @@ env/
 
 # Scripts temporales de pruebas
 scratch/
+
+# Locks de ejecución
+.depto-monitor.lock
+.depto-monitor-bot-supervisor.lock

@@ -15,6 +15,8 @@ import sys
 import logging
 import argparse
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+from typing import Optional
 
 from config import (
     LOG_FILE,
@@ -43,6 +45,7 @@ from scraper import (
     enriquecer_con_gc,
 )
 from filtro import aplicar_filtros_y_scoring
+from execution_lock import ciclo_lock
 from uf_helper import obtener_valor_uf
 from notificador import (
     verificar_conexion_telegram,
@@ -60,7 +63,12 @@ def setup_logging(dry_run: bool = False) -> None:
     nivel = getattr(logging, LOG_LEVEL.upper(), logging.INFO)
     handlers = [
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=5_000_000,
+            backupCount=3,
+            encoding="utf-8",
+        ),
     ]
     logging.basicConfig(
         level=nivel,
@@ -79,7 +87,22 @@ logger = logging.getLogger(__name__)
 # CICLO PRINCIPAL
 # ─────────────────────────────────────────────────────────
 
-def ejecutar_ciclo(dry_run: bool = False) -> bool:
+def ejecutar_ciclo(dry_run: bool = False) -> Optional[bool]:
+    """Ejecuta un ciclo solo si no hay otro en curso.
+
+    Retorna ``True``/``False`` con el resultado del ciclo, o ``None`` cuando
+    otro proceso ya está ejecutando uno.
+    """
+    with ciclo_lock() as adquirido:
+        if not adquirido:
+            logger.warning(
+                "Ya hay otro ciclo de monitoreo en ejecución; se omite este."
+            )
+            return None
+        return _ejecutar_ciclo(dry_run)
+
+
+def _ejecutar_ciclo(dry_run: bool = False) -> bool:
     inicio = datetime.now().isoformat()
     logger.info("=" * 60)
     logger.info("INICIO DE CICLO — %s%s", inicio, " [DRY RUN]" if dry_run else "")
@@ -247,17 +270,28 @@ def ejecutar_ciclo(dry_run: bool = False) -> bool:
     finally:
         fin = datetime.now().isoformat()
         if not dry_run:
-            registrar_ejecucion(inicio, fin, total_nuevas, total_analizadas, status)
-            if status == "WARN_EMPTY":
-                notificar_alerta_scraper(
-                    status,
-                    "No se encontraron publicaciones. Revisa conectividad, bloqueo o cambios de estructura web.",
+            try:
+                registrar_ejecucion(
+                    inicio, fin, total_nuevas, total_analizadas, status
                 )
-            elif status in ("BLOCKED", "SCRAPE_ERROR", "ERROR", "WARN_PARTIAL"):
-                notificar_alerta_scraper(
-                    status,
-                    detalle_error or "El scraping no pudo completarse correctamente.",
-                )
+            except Exception:
+                logger.exception("No se pudo registrar el resultado del ciclo.")
+
+            try:
+                if status == "WARN_EMPTY":
+                    notificar_alerta_scraper(
+                        status,
+                        "No se encontraron publicaciones. Revisa conectividad, "
+                        "bloqueo o cambios de estructura web.",
+                    )
+                elif status in ("BLOCKED", "SCRAPE_ERROR", "ERROR", "WARN_PARTIAL"):
+                    notificar_alerta_scraper(
+                        status,
+                        detalle_error
+                        or "El scraping no pudo completarse correctamente.",
+                    )
+            except Exception:
+                logger.exception("No se pudo enviar la alerta del ciclo.")
         logger.info("FIN DE CICLO — nuevas: %d — status: %s", total_nuevas, status)
         logger.info("=" * 60)
     return ciclo_ok
@@ -307,8 +341,9 @@ def main() -> None:
         iniciar_bot(ejecutar_ciclo)
         return
 
-    # Ejecutar ciclo
-    if not ejecutar_ciclo(dry_run=args.test):
+    # Ejecutar ciclo (None = otro proceso ya tenía el lock)
+    resultado = ejecutar_ciclo(dry_run=args.test)
+    if resultado is False:
         sys.exit(1)
 
 

@@ -17,7 +17,7 @@ fi
 
 echo "==> Instalando paquetes de Termux..."
 pkg update -y
-pkg install -y git python cronie termux-services tzdata ca-certificates
+pkg install -y git python cronie termux-services tzdata ca-certificates util-linux
 
 if [ -d "$SCRIPT_DIR/.git" ]; then
     DEST="$SCRIPT_DIR"
@@ -84,7 +84,21 @@ cat > "$HOME/.termux/boot/start-depto-monitor.sh" <<BOOT
 #!/data/data/com.termux/files/usr/bin/sh
 termux-wake-lock >/dev/null 2>&1 || true
 sv up crond >/dev/null 2>&1 || true
-"$DEST/run_monitor.sh" --bot >> "$DEST/telegram-bot.log" 2>&1 &
+
+# Un solo supervisor del bot; si el proceso muere, se relanza solo.
+exec 8>>"$DEST/.depto-monitor-bot-supervisor.lock"
+if command -v flock >/dev/null 2>&1; then
+    if ! flock -n 8; then
+        echo "Ya hay un supervisor del bot en ejecución." >> "$DEST/telegram-bot.log"
+        exit 0
+    fi
+fi
+
+while true; do
+    "$DEST/run_monitor.sh" --bot 8>&- >> "$DEST/telegram-bot.log" 2>&1
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Bot terminó; reinicio en 15 s." >> "$DEST/telegram-bot.log"
+    sleep 15
+done
 BOOT
 chmod +x "$HOME/.termux/boot/start-depto-monitor.sh"
 
@@ -102,7 +116,8 @@ cat <<EOF
    cd $DEST && ./run_monitor.sh
    cd $DEST && ./run_monitor.sh --bot
 
- El chat de Telegram se inicia automáticamente con Termux:Boot.
+ El chat de Telegram se inicia automáticamente con Termux:Boot
+ y se relanza si el proceso termina.
 
  Revisa el log con:
    tail -f $CRON_LOG

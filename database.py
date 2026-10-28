@@ -17,8 +17,13 @@ logger = logging.getLogger(__name__)
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError as exc:
+        logger.warning("No se pudo activar WAL en SQLite: %s", exc)
     return conn
 
 

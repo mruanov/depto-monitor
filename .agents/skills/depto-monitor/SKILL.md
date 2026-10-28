@@ -25,9 +25,10 @@ Deptos/
 ├── scraper.py              ← Extracción web (requests + curl_cffi/Playwright opcionales)
 ├── filtro.py               ← Filtros y scoring
 ├── database.py             ← SQLite para deduplicación e historial
+├── execution_lock.py       ← Lock de ciclo compartido con run_monitor.sh
 ├── notificador.py          ← Bot Telegram
 ├── uf_helper.py            ← Valor UF actualizado desde mindicador.cl
-├── run_monitor.sh          ← Ejecuta un ciclo con .env y TZ de Chile
+├── run_monitor.sh          ← Ejecuta un ciclo con .env, lock y TZ de Chile
 ├── setup_termux.sh         ← Instalación y cron en Termux
 ├── README_ANDROID.md       ← Guía paso a paso para Android TV Box
 ├── requirements.txt        ← Dependencias para macOS/Linux/Actions
@@ -83,6 +84,11 @@ credenciales en `config.py` ni en el repositorio.
 ```
 Mantén `termux-wake-lock`, `sv up crond` y la batería de Termux sin restricciones.
 Usa `sv status crond` para comprobar el servicio.
+
+`run_monitor.sh` usa `.depto-monitor.lock` para impedir ciclos simultáneos
+(cron vs. `/force_run`). Si el `git pull` falla por red, el ciclo continúa.
+El supervisor de Termux:Boot relanza `./run_monitor.sh --bot` si el proceso
+muere, y `agente_deptos.log` rota cada 5 MB conservando 3 respaldos.
 
 ## Parámetros calibrados (actuales)
 - Precio máximo total (arriendo + GC): $470.000 CLP

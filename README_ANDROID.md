@@ -43,13 +43,14 @@ bash setup_termux.sh
 
 El script:
 
-1. Instala Python, `cronie`, `termux-services`, `tzdata` y certificados.
+1. Instala Python, `cronie`, `termux-services`, `tzdata`, `util-linux` y certificados.
 2. Crea el entorno virtual e instala `requirements-termux.txt`.
 3. Pide el token y chat ID de Telegram y los guarda en `.env` (permisos `600`).
 4. Verifica la conexión con Telegram.
 5. Programa el ciclo cada 4 horas en `crontab`.
 6. Habilita `crond`, el wake-lock y el arranque con Termux:Boot. El script de
-   inicio también lanza el chat interactivo de Telegram.
+   inicio mantiene un supervisor que relanza el chat interactivo de Telegram
+   si el proceso termina.
 
 ## Verificación manual
 
@@ -100,12 +101,18 @@ El log del cron queda en `~/depto-monitor/monitor-cron.log`:
 tail -f ~/depto-monitor/monitor-cron.log
 ```
 
-Cada ejecución de `run_monitor.sh` actualiza el checkout con
-`git pull --ff-only origin main` antes de iniciar Python. Por eso los ciclos de
-cron y los inicios del bot toman automáticamente la última versión publicada
-en `main`. La TV Box debe tener conectividad con GitHub y no mantener cambios
-locales en archivos versionados; conserva sus credenciales en el `.env`
-ignorado por Git.
+Cada ejecución de `run_monitor.sh` intenta actualizar el checkout con
+`git pull --ff-only origin main` antes de iniciar Python. Si GitHub no está
+disponible, el ciclo continúa con el código actual. Un lock en
+`.depto-monitor.lock` evita que cron y `/force_run` ejecuten ciclos a la vez;
+si ya hay uno en curso, el nuevo proceso termina sin hacer nada.
+
+El log principal `agente_deptos.log` rota automáticamente cada 5 MB y conserva
+3 archivos anteriores (`.1`, `.2`, `.3`). El log del cron
+(`monitor-cron.log`) no rota: revísalo o trúncalo si crece demasiado.
+
+La TV Box debe tener conectividad con GitHub y no mantener cambios locales en
+archivos versionados; conserva sus credenciales en el `.env` ignorado por Git.
 
 ## Configuración del cron
 
