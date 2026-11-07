@@ -34,6 +34,7 @@ def init_db() -> None:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS publicaciones (
                 id              TEXT PRIMARY KEY,
+                fuente          TEXT,
                 url             TEXT NOT NULL,
                 titulo          TEXT,
                 ubicacion       TEXT,
@@ -75,6 +76,16 @@ def init_db() -> None:
                 notificado INTEGER NOT NULL DEFAULT 0
             );
         """)
+        columnas = {
+            fila["name"]
+            for fila in conn.execute("PRAGMA table_info(publicaciones)")
+        }
+        if "fuente" not in columnas:
+            conn.execute("ALTER TABLE publicaciones ADD COLUMN fuente TEXT")
+        conn.execute(
+            "UPDATE publicaciones SET fuente = 'Portal Inmobiliario' "
+            "WHERE fuente IS NULL AND id LIKE 'MLC-%'"
+        )
     overrides = {
         fila["clave"]: json.loads(fila["valor"])
         for fila in conn.execute("SELECT clave, valor FROM parametros")
@@ -95,6 +106,16 @@ def es_nueva(pub_id: str) -> bool:
     return row is None or not row["notificado"]
 
 
+def _inferir_fuente(pub_id: str):
+    if pub_id.startswith("YAPO-"):
+        return "Yapo"
+    if pub_id.startswith("GP-"):
+        return "goplaceit"
+    if pub_id.startswith("MLC-"):
+        return "Portal Inmobiliario"
+    return None
+
+
 def guardar_publicacion(pub: dict) -> None:
     """Inserta o actualiza una publicación en la base de datos."""
     ahora = datetime.now().isoformat()
@@ -102,14 +123,15 @@ def guardar_publicacion(pub: dict) -> None:
     with conn:
         conn.execute("""
             INSERT INTO publicaciones
-                (id, url, titulo, ubicacion, comuna, precio_uf, precio_clp,
+                (id, fuente, url, titulo, ubicacion, comuna, precio_uf, precio_clp,
                  gc_clp, precio_total, superficie, dormitorios, banos,
                  imagen_url, score, primera_vista, ultima_vista, notificado)
             VALUES
-                (:id, :url, :titulo, :ubicacion, :comuna, :precio_uf, :precio_clp,
+                (:id, :fuente, :url, :titulo, :ubicacion, :comuna, :precio_uf, :precio_clp,
                  :gc_clp, :precio_total, :superficie, :dormitorios, :banos,
                  :imagen_url, :score, :primera_vista, :ultima_vista, :notificado)
             ON CONFLICT(id) DO UPDATE SET
+                fuente       = COALESCE(fuente, excluded.fuente),
                 ultima_vista = excluded.ultima_vista,
                 precio_uf    = excluded.precio_uf,
                 precio_clp   = excluded.precio_clp,
@@ -118,6 +140,7 @@ def guardar_publicacion(pub: dict) -> None:
                 score        = excluded.score
         """, {
             **pub,
+            "fuente": pub.get("fuente") or _inferir_fuente(pub.get("id", "")),
             "primera_vista": ahora,
             "ultima_vista":  ahora,
             "notificado":    0,

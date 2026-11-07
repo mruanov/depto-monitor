@@ -74,7 +74,7 @@ def _interpretar_consulta(texto: str) -> tuple:
     if any(palabra in consulta for palabra in ("cuantos", "cuantas", "total de", "cuenta")):
         return "conteo", None
     if "score" in consulta and any(palabra in consulta for palabra in ("por que", "porque")):
-        coincidencia = re.search(r"\bMLC-\d+\b", texto, re.IGNORECASE)
+        coincidencia = re.search(r"\b(?:MLC|YAPO|GP)-\d+\b", texto, re.IGNORECASE)
         return "score", coincidencia.group(0) if coincidencia else None
     if any(palabra in consulta for palabra in (
         "resumen", "departamento", "deptos", "avisos",
@@ -189,7 +189,7 @@ def _responder(texto: str) -> str:
 def _mensaje_score(identificador: Optional[str]) -> str:
     publicacion = obtener_publicacion_para_analisis(identificador)
     if not publicacion:
-        return "No encontré esa publicación. Usa /score MLC-123 o /score para la de menor puntuación."
+        return "No encontré esa publicación. Usa /score MLC-123, /score YAPO-123 o /score GP-123."
 
     detalle = detallar_score(publicacion)
     score_guardado = float(publicacion.get("score") or 0)

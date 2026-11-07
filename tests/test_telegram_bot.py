@@ -26,6 +26,12 @@ class TelegramBotTests(unittest.TestCase):
     def test_parses_market_score_and_parameter_commands(self):
         self.assertEqual(telegram_bot._interpretar_consulta("/mercado"), ("mercado", None))
         self.assertEqual(telegram_bot._interpretar_consulta("/score MLC-123"), ("score", "MLC-123"))
+        self.assertEqual(telegram_bot._interpretar_consulta("/score YAPO-123"), ("score", "YAPO-123"))
+        self.assertEqual(telegram_bot._interpretar_consulta("/score GP-123"), ("score", "GP-123"))
+        self.assertEqual(
+            telegram_bot._interpretar_consulta("¿Por qué tiene score bajo YAPO-123?"),
+            ("score", "YAPO-123"),
+        )
         self.assertEqual(telegram_bot._interpretar_consulta("/precio 500000"), ("set_precio", "500000"))
         self.assertEqual(
             telegram_bot._interpretar_consulta("/comunas Las Condes, Providencia"),

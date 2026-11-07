@@ -10,7 +10,7 @@ import main
 
 class MonitorAnalyticsTests(unittest.TestCase):
     def test_empty_scrape_sends_preventive_alert(self):
-        with patch.object(main, "scrapear_todas_las_comunas", return_value=[]):
+        with patch.object(main, "scrapear_todas_las_fuentes", return_value=([], [])):
             with patch.object(main, "registrar_ejecucion") as register:
                 with patch.object(main, "notificar_alerta_scraper") as alert:
                     self.assertTrue(main.ejecutar_ciclo())
@@ -43,7 +43,7 @@ class MonitorAnalyticsTests(unittest.TestCase):
                     "superficie": 50, "dormitorios": 1, "banos": 1,
                     "imagen_url": None, "score": 0,
                 }
-                with patch.object(main, "scrapear_todas_las_comunas", return_value=[pub]):
+                with patch.object(main, "scrapear_todas_las_fuentes", return_value=([pub], [])):
                     with patch.object(main, "obtener_valor_uf", return_value=41000):
                         with patch.object(filtro, "obtener_valor_uf", return_value=41000):
                             with patch.object(main, "enriquecer_con_gc") as enrich:

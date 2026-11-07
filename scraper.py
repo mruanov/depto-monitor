@@ -459,6 +459,7 @@ def _parsear_tarjeta(card, comuna: str, uf_valor: float) -> Optional[dict]:
 
         return {
             "id":           pub_id,
+            "fuente":       "Portal Inmobiliario",
             "url":          url,
             "titulo":       titulo,
             "ubicacion":    ubicacion,

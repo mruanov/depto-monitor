@@ -5,6 +5,9 @@ Portal Inmobiliario bloquea las IPs de datacenter de GitHub Actions y redirige a
 monitoreo real se ejecuta desde una red residencial usando Termux en el Android
 TV Box. El workflow de GitHub queda solo como informativo.
 
+El ciclo consulta tres fuentes: Portal Inmobiliario, Yapo y goplaceit. Si una
+fuente falla, las demás continúan y el ciclo queda marcado como parcial.
+
 ## Requisitos
 
 - Android 7 o superior (TV Box encendido 24/7).
@@ -168,16 +171,38 @@ BeautifulSoup cae a `html.parser`.
 
 ## Actualizar el proyecto
 
+La integración multifuente no agrega dependencias: Yapo y goplaceit usan
+`requests` y `beautifulsoup4`, que ya están instalados.
+
 ```bash
 cd ~/depto-monitor
-git pull --ff-only
-./.venv/bin/pip install -r requirements-termux.txt
+git pull --ff-only origin main
 ./run_monitor.sh --test
-bash setup_termux.sh
 ```
 
-Vuelve a ejecutar `setup_termux.sh` para actualizar el script de Termux:Boot
-que inicia el bot automáticamente.
+En la prueba deben aparecer las tres fuentes, por ejemplo:
+
+```text
+Portal Inmobiliario: 25 avisos recolectados
+Yapo: 11 avisos recolectados
+goplaceit: 15 avisos recolectados
+```
+
+Si termina con `status: OK`, ejecuta un ciclo real inmediato para empezar a
+recibir alertas con las nuevas fuentes:
+
+```bash
+./run_monitor.sh
+```
+
+El cron seguirá ejecutando el ciclo cada 4 horas y `run_monitor.sh` intenta
+`git pull --ff-only origin main` antes de cada ejecución. Si actualizaste el
+chat interactivo, reinicia el proceso del bot para que cargue el nuevo código;
+el supervisor de Termux:Boot lo relanza automáticamente. Si no está activo,
+inícialo con `./run_monitor.sh --bot`.
+
+Vuelve a ejecutar `setup_termux.sh` solo si cambió el script de arranque de
+Termux:Boot.
 
 ## Problemas frecuentes
 

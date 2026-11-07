@@ -93,6 +93,31 @@ class KeywordFilterTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertFalse(filtro.filtrar_ubicacion(self.publication(title)))
 
+    def test_rejects_short_stay_and_storage_only_listings(self):
+        self.assertFalse(
+            filtro.filtrar_ubicacion(
+                self.publication("DEPTO CORTAS ESTADIAS FINES MEDICOS")
+            )
+        )
+        self.assertFalse(
+            filtro.filtrar_ubicacion(
+                self.publication(
+                    "Departamento en arriendo en Las Condes",
+                    "Bodega amplia en primer subterraneo con acceso facil.",
+                )
+            )
+        )
+
+    def test_rejects_room_listed_as_family_home(self):
+        self.assertFalse(
+            filtro.filtrar_ubicacion(
+                self.publication(
+                    "Studio en arriendo en casa en Las Condes",
+                    "En casa de familia, hermosa habitacion con bano privado.",
+                )
+            )
+        )
+
     def test_rejects_service_keywords_in_title_or_description(self):
         for text in ("Administración de propiedades", "Corretaje", "COMISION"):
             with self.subTest(text=text):

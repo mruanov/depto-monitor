@@ -81,6 +81,13 @@ PALABRAS_CLAVE_NO_VALIDAS = [
     "patrocinado",
     "nuevoproyecto",
     "arriendo diario",
+    "arriendo por dia",
+    "arriendo por noche",
+    "por dia",
+    "por noche",
+    "corta estadia",
+    "cortas estadias",
+    "corto plazo",
     "alquiler temporal",
     "administracion de propiedades",
     "administración de propiedades",
@@ -126,6 +133,50 @@ BASE_URL_TEMPLATE = (
 
 # Cantidad de avisos por página en Portal Inmobiliario (normalmente 48)
 ITEMS_PER_PAGE = 48
+
+# ──────────────────────────────────────────────────────────
+# FUENTES COMPLEMENTARIAS
+# ──────────────────────────────────────────────────────────
+FUENTES_ACTIVAS = [
+    "Portal Inmobiliario",
+    "Yapo",
+    "goplaceit",
+]
+
+YAPO_BASE_URL = "https://www.yapo.cl"
+YAPO_API_BASE_URL = "https://public-api.yapo.cl"
+YAPO_COMUNA_SLUGS = {
+    "Las Condes": "chile-es-region-metropolitana-las-condes",
+    "Vitacura": "chile-es-region-metropolitana-vitacura",
+    "Providencia": "chile-es-region-metropolitana-providencia",
+    "Lo Barnechea": "chile-es-region-metropolitana-lo-barnechea",
+    "Ciudad Empresarial": "chile-es-region-metropolitana-huechuraba",
+}
+YAPO_MAX_PAGINAS = 2
+YAPO_DELAY_ENTRE_PAGINAS = 1.0
+YAPO_DELAY_ENTRE_DETALLES = 0.35
+
+GOPLACEIT_API_URL = "https://api.goplaceit.com/api/v4"
+GOPLACEIT_BASE_URL = "https://www.goplaceit.com"
+GOPLACEIT_COMUNAS = {
+    "Las Condes": 288,
+    "Vitacura": 306,
+    "Providencia": 297,
+    "Lo Barnechea": 289,
+    "Ciudad Empresarial": 281,
+}
+GOPLACEIT_PER_PAGE = 50
+GOPLACEIT_MAX_PAGINAS = 3
+GOPLACEIT_DELAY_ENTRE_REQUESTS = 0.35
+GOPLACEIT_HEADERS = {
+    "Accept": "application/json",
+    "Origin": "https://www.goplaceit.com",
+    "Referer": "https://www.goplaceit.com/",
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36"
+    ),
+}
 
 # ──────────────────────────────────────────────────────────
 # VALOR DE REFERENCIA UF (se actualiza automáticamente)

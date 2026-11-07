@@ -163,6 +163,21 @@ def _es_publicacion_no_valida(titulo: str, descripcion: str) -> Optional[str]:
         if _contiene_termino(contenido_normalizado, _normalizar_texto(palabra)):
             return palabra
 
+    descripcion_normalizada = _normalizar_texto(descripcion)
+    if re.match(r"^\W*bodega\b", descripcion_normalizada) and not re.search(
+        r"\b(?:departamento|depto|estudio|dormitorio|habitacion|"
+        r"living|comedor|banos?)\b",
+        descripcion_normalizada,
+    ):
+        return "bodega"
+
+    if re.search(
+        r"\b(?:casa de familia|solo (?:mujer|hombre|mujeres|hombres)|"
+        r"habitacion con todos los servicios|habitacion con bano privado)\b",
+        contenido_normalizado,
+    ):
+        return "arriendo de pieza o habitación"
+
     tipos_depto = ("departamento", "depto", "studio", "estudio", "loft")
     es_departamento = any(
         _contiene_termino(titulo_normalizado, tipo) for tipo in tipos_depto

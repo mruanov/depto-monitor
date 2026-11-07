@@ -39,11 +39,10 @@ from database import (
 )
 from scraper import (
     ScrapeAccessError,
-    ScrapePartialError,
     ScrapeUnavailableError,
-    scrapear_todas_las_comunas,
     enriquecer_con_gc,
 )
+from fuentes import scrapear_todas_las_fuentes
 from filtro import aplicar_filtros_y_scoring
 from execution_lock import ciclo_lock
 from uf_helper import obtener_valor_uf
@@ -115,24 +114,27 @@ def _ejecutar_ciclo(dry_run: bool = False) -> bool:
     detalle_error = ""
 
     try:
-        logger.info("PASO 1: Scrapeando Portal Inmobiliario...")
-        try:
-            publicaciones_crudas = scrapear_todas_las_comunas()
-        except ScrapePartialError as exc:
-            publicaciones_crudas = exc.publicaciones
-            status = "WARN_PARTIAL"
-            detalle_error = str(exc)
-            logger.warning(
-                "%s Fallaron %d comuna(s); se procesarán los avisos obtenidos.",
-                exc,
-                len(exc.errores),
-            )
+        logger.info("PASO 1: Scrapeando fuentes activas...")
+        publicaciones_crudas, errores_fuentes = scrapear_todas_las_fuentes()
         total_analizadas = len(publicaciones_crudas)
         logger.info("Total publicaciones scraped: %d", total_analizadas)
 
+        if errores_fuentes:
+            status = "WARN_PARTIAL"
+            detalle_error = "; ".join(
+                f"{item['fuente']}: {item['error']}" for item in errores_fuentes
+            )
+            logger.warning(
+                "Fallaron %d fuente(s); se procesarán los avisos obtenidos: %s",
+                len(errores_fuentes),
+                detalle_error,
+            )
+
         if not publicaciones_crudas:
             logger.warning("No se obtuvieron publicaciones. Verifique la conectividad.")
-            if status != "WARN_PARTIAL":
+            if errores_fuentes:
+                status = "SCRAPE_ERROR"
+            else:
                 status = "WARN_EMPTY"
                 detalle_error = "El scraper terminó sin encontrar publicaciones."
             return True
@@ -198,9 +200,12 @@ def _ejecutar_ciclo(dry_run: bool = False) -> bool:
             precio_uf = pub.get("precio_uf") or 0
             precio_base_clp = precio_clp or int(precio_uf * uf_actual)
             if (
-                pub.get("_es_nueva")
-                or pub.get("gc_clp") is None
-                or precio_base_clp > maximo
+                pub.get("fuente") in (None, "Portal Inmobiliario")
+                and (
+                    pub.get("_es_nueva")
+                    or pub.get("gc_clp") is None
+                    or precio_base_clp > maximo
+                )
             ):
                 enriquecer_con_gc(pub)
             publicaciones_enriquecidas.append(pub)
